@@ -125,40 +125,40 @@
     setStatus("Cámara iniciada.", "ok");
   }
 
-  // === 3) Modelos ===
-  async function initModels(){
-    setStatus("Cargando modelos y WASM…");
-    const v = "0.10.7"; // misma versión para el WASM
-    const vision = await FilesetResolver.forVisionTasks(
-      `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${v}/wasm`
-    );
-
-    faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-        delegate: "GPU"
-      },
-      runningMode: "VIDEO",
-      outputFaceBlendshapes: true,
-      numFaces: 1,
-      minFaceDetectionConfidence: 0.5,
-      minFacePresenceConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
-
-    handLandmarker = await HandLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
-      },
-      runningMode: "VIDEO",
-      numHands: 2,
-      minHandDetectionConfidence: 0.5,
-      minHandPresenceConfidence: 0.5,
-      minTrackingConfidence: 0.5
-    });
-
-    setStatus("Modelos listos.", "ok");
-  }
+    // === 3) Modelos ===
+    async function initModels(){
+      setStatus("Cargando modelos y WASM…");
+      const v = "0.10.7"; // misma versión para el WASM
+      const vision = await FilesetResolver.forVisionTasks(
+        `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${v}/wasm`
+      );
+  
+      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+          delegate: "GPU"
+        },
+        runningMode: "VIDEO",
+        outputFaceBlendshapes: true,
+        numFaces: 1,
+        minFaceDetectionConfidence: 0.5,
+        minFacePresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+  
+      handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+        },
+        runningMode: "VIDEO",
+        numHands: 2,
+        minHandDetectionConfidence: 0.5,
+        minHandPresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+  
+      setStatus("Modelos listos.", "ok");
+    }
 
   // === Utilidades de dibujo y métricas ===
   function drawPoints(points, size=2){
