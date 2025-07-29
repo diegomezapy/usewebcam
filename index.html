@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Demo — Cámara + Expresiones Faciales + Recuento de Dedos</title>
+  <title>Demo — Cámara + Expresiones (blendshapes) + Recuento de Dedos</title>
 
   <!-- MediaPipe Tasks Vision (bundle web) -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js"
           crossorigin="anonymous"></script>
 
   <style>
-    :root { --bg:#0b1020; --fg:#eaeef7; --accent:#4ea1ff; --ok:#2ecc71; --warn:#ffb020; }
+    :root { --bg:#0b1020; --fg:#eaeef7; --accent:#4ea1ff; --ok:#2ecc71; --warn:#ffb020; --err:#ff5566;}
     html,body { height:100%; margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,Segoe UI,Roboto,sans-serif;}
     .wrap { max-width:1100px; margin:0 auto; padding:1rem; }
     h1 { font-size:1.15rem; font-weight:600; margin:0 0 .5rem 0; color:#cfd8ff; }
@@ -21,9 +21,15 @@
     .panel { background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); border-radius:12px; padding:.75rem; }
     .kv { display:grid; grid-template-columns:1fr auto; gap:.35rem .75rem; font-variant-numeric:tabular-nums; }
     .tag { display:inline-block; padding:.15rem .45rem; border-radius:.5rem; background:#1d2a44; color:#b8cff7; font-size:.85rem; }
-    canvas, video { width:100%; height:auto; border-radius:12px; background:#000; }
+    canvas, video { width:100%; height:auto; border-radius:12px; background:#000; display:block; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .small { font-size:.9rem; opacity:.8; }
+    .small { font-size:.9rem; opacity:.85; }
+    .status { margin-top:.5rem; font-size:.9rem;}
+    .status span { display:inline-block; padding:.25rem .5rem; border-radius:.5rem; background:#1d2338; }
+    .status .ok { color:var(--ok); }
+    .status .warn { color:var(--warn); }
+    .status .err { color:var(--err); }
+    @media (max-width: 900px){ .grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -32,16 +38,16 @@
 
     <div class="controls">
       <button id="btnStart">Iniciar cámara</button>
-      <span class="small">Resolución solicitada: 1280×720 (ideal). Si tu dispositivo no dispone, el navegador negociará otra. </span>
+      <span class="small">Resolución solicitada: 1280×720 (ideal). Si no está disponible, el navegador negociará otra.</span>
     </div>
 
     <div class="grid">
       <div class="panel">
-        <!-- Contenedor de video + overlay -->
         <div style="position:relative; width:100%; overflow:hidden; border-radius:12px;">
-          <video id="video" playsinline autoplay muted style="display:block;"></video>
+          <video id="video" playsinline autoplay muted></video>
           <canvas id="overlay" style="position:absolute; left:0; top:0;"></canvas>
         </div>
+        <div id="status" class="status"><span>Listo.</span></div>
       </div>
 
       <div class="panel">
@@ -58,112 +64,102 @@
           Consejos:
           <ul>
             <li>Iluminación frontal uniforme.</li>
-            <li>Rostro aproximadamente de frente para *blendshapes* estables.</li>
-            <li>Mano visible completa para recuento fiable.</li>
+            <li>Rostro de frente para *blendshapes* estables.</li>
+            <li>Mano completa en cuadro para recuento fiable.</li>
           </ul>
         </div>
       </div>
     </div>
 
     <p class="small">
-      Si incrustas esta app en un <code>&lt;iframe&gt;</code> de un portal (p.ej. Google Sites), debes permitir cámara:
-      <code class="mono">&lt;iframe ... allow="camera; microphone"&gt;</code>, o abrir en pestaña nueva para evitar políticas de permisos. :contentReference[oaicite:4]{index=4}
+      Si incrustas esta app en un <code>&lt;iframe&gt;</code> (p.ej. Google Sites), añade <code class="mono">allow="camera; microphone"</code>,
+      o abre en pestaña nueva.
     </p>
   </div>
 
   <script>
   (function(){
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('overlay');
-    const ctx = canvas.getContext('2d', { alpha: true });
-    const btn = document.getElementById('btnStart');
-    const mFps = document.getElementById('fps');
-    const mFaces = document.getElementById('nfaces');
-    const mHands = document.getElementById('nhands');
-    const mFingers = document.getElementById('fingers');
-    const mExpr = document.getElementById('expr');
+    const $ = (id)=>document.getElementById(id);
+    const video = $("video");
+    const canvas = $("overlay");
+    const ctx = canvas.getContext("2d", { alpha:true });
+    const btn = $("btnStart");
+    const mFps = $("fps"), mFaces = $("nfaces"), mHands = $("nhands"), mFingers = $("fingers"), mExpr = $("expr");
+    const statusEl = $("status");
 
-    let lastTime = performance.now(), frameCount = 0, fps = 0;
+    let running = false, frameCount=0, lastTime=performance.now(), fps=0;
+    let faceLandmarker=null, handLandmarker=null;
 
-    // MediaPipe Tasks
-    let faceLandmarker = null;
-    let handLandmarker = null;
-    let running = false;
-
-    // Carga de modelos (MediaPipe Tasks Vision)
-    async function initModels(){
-      const {FaceLandmarker, HandLandmarker, FilesetResolver} = window;
-      const vision = await FilesetResolver.forVisionTasks(
-        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
-      );
-      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-          delegate: "GPU"
-        },
-        outputFaceBlendshapes: true,
-        runningMode: "VIDEO",
-        numFaces: 1,
-        minFaceDetectionConfidence: 0.5,
-        minFacePresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
-      handLandmarker = await HandLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
-        },
-        runningMode: "VIDEO",
-        numHands: 2,
-        minHandDetectionConfidence: 0.5,
-        minHandPresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
+    function setStatus(msg, cls=""){
+      statusEl.innerHTML = `<span class="${cls}">${msg}</span>`;
+      // también deja el último error en consola para diagnóstico
+      if (cls==="err") console.error("[Estado]", msg);
+      else console.log("[Estado]", msg);
     }
 
-    // Heurística de expresión a partir de blendshapes
-    function estimateExpression(blendshapes){
-      if(!blendshapes || !blendshapes.categories || !blendshapes.categories.length) return "–";
-      const score = (name) => {
-        const c = blendshapes.categories.find(x => x.categoryName === name);
-        return c ? c.score : 0.0;
-      };
-      const smile = (score("mouthSmileLeft") + score("mouthSmileRight"))/2;
-      const open = score("jawOpen");
-      const browUp = score("browInnerUp");
-
-      if (smile > 0.5 && open < 0.4) return "Feliz / Sonrisa";
-      if (open > 0.6 && browUp > 0.3) return "Sorprendido";
-      return "Neutro / Otro";
-    }
-
-    // Recuento de dedos: 4 dedos por comparación TIP vs PIP (y ascendente Y=arriba),
-    // pulgar por relación TIP vs IP y ‘handedness’ (izq./der.).
-    function countFingersForHand(landmarks, handednessLabel){
-      if(!landmarks || landmarks.length !== 21) return 0;
-      // Índices estándares MediaPipe
-      const TIP = {thumb:4, index:8, middle:12, ring:16, pinky:20};
-      const PIP = {index:6, middle:10, ring:14, pinky:18};
-      const IP  = 3; // pulgar (interfalángica)
-      const wrist = landmarks[0];
-
-      // En imágenes normalizadas: eje Y crece hacia ABAJO. Dedo extendido si tip.y < pip.y (mano aproximadamente vertical).
-      let count = 0;
-      ["index","middle","ring","pinky"].forEach(f=>{
-        if (landmarks[TIP[f]].y < landmarks[PIP[f]].y) count++;
-      });
-
-      // Pulgar: usar eje X relativo según mano
-      const thumbTip = landmarks[TIP.thumb], thumbIp = landmarks[IP];
-      if (handednessLabel === "Right") {
-        if (thumbTip.x > thumbIp.x + 0.03) count++;
-      } else if (handednessLabel === "Left") {
-        if (thumbTip.x < thumbIp.x - 0.03) count++;
+    async function startCamera(){
+      setStatus("Solicitando cámara…");
+      try{
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width:{ideal:1280}, height:{ideal:720}, facingMode:{ideal:"user"} },
+          audio: false
+        });
+        video.srcObject = stream;
+        await video.play();
+        canvas.width = video.videoWidth || 1280;
+        canvas.height = video.videoHeight || 720;
+        setStatus("Cámara iniciada.", "ok");
+      }catch(e){
+        let hint = "";
+        if (e && e.name==="NotAllowedError") hint = "Permiso denegado. Autoriza la cámara para este sitio.";
+        else if (e && e.name==="NotFoundError") hint = "No se encontró un dispositivo de cámara.";
+        else if (e && e.name==="OverconstrainedError") hint = "La cámara no soporta la resolución solicitada. Prueba sin 'ideal' o más baja.";
+        setStatus(`No se pudo iniciar la cámara: ${e.name || e}. ${hint}`, "err");
+        throw e;
       }
-      return count;
     }
 
-    function drawLandmarks(points, color, size=3){
-      ctx.fillStyle = color;
+    async function initModels(){
+      setStatus("Cargando modelos (puede tardar)…");
+      try{
+        // Clases globales expuestas por vision_bundle.js
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+        );
+
+        faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+            delegate: "GPU"
+          },
+          runningMode: "VIDEO",
+          outputFaceBlendshapes: true,
+          numFaces: 1,
+          minFaceDetectionConfidence: 0.5,
+          minFacePresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        handLandmarker = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+          },
+          runningMode: "VIDEO",
+          numHands: 2,
+          minHandDetectionConfidence: 0.5,
+          minHandPresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5
+        });
+
+        setStatus("Modelos listos.", "ok");
+      }catch(e){
+        setStatus(`Modelos no cargaron: ${e && e.message ? e.message : e}. Continuando solo con cámara.`, "warn");
+        // Permitimos que el loop corra con cámara aunque no haya modelos
+      }
+    }
+
+    function drawPoints(points, size=2.5){
+      ctx.fillStyle = "#4ea1ff";
       for(const p of points){
         ctx.beginPath();
         ctx.arc(p.x * canvas.width, p.y * canvas.height, size, 0, Math.PI*2);
@@ -171,20 +167,13 @@
       }
     }
 
-    async function startCamera(){
-      // Requiere contexto seguro (HTTPS) y gesto de usuario. :contentReference[oaicite:5]{index=5}
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height:{ ideal: 720 },
-          facingMode: { ideal: "user" } // cámara frontal cuando esté disponible
-        },
-        audio: false
-      });
-      video.srcObject = stream;
-      await video.play();
-      canvas.width = video.videoWidth || 1280;
-      canvas.height = video.videoHeight || 720;
+    function drawHand(points){
+      ctx.fillStyle = "#2ecc71";
+      for(const p of points){
+        ctx.beginPath();
+        ctx.arc(p.x * canvas.width, p.y * canvas.height, 3, 0, Math.PI*2);
+        ctx.fill();
+      }
     }
 
     function updateFps(){
@@ -196,56 +185,81 @@
       }
     }
 
+    function estimateExpression(blend){
+      if(!blend || !blend.categories || !blend.categories.length) return "–";
+      const s = (n)=>{ const c=blend.categories.find(x=>x.categoryName===n); return c?c.score:0; };
+      const smile = (s("mouthSmileLeft")+s("mouthSmileRight"))/2, open=s("jawOpen"), brow=s("browInnerUp");
+      if (smile>0.5 && open<0.4) return "Feliz / Sonrisa";
+      if (open>0.6 && brow>0.3) return "Sorprendido";
+      return "Neutro / Otro";
+    }
+
+    function countFingersForHand(landmarks, handed="Unknown"){
+      if(!landmarks || landmarks.length!==21) return 0;
+      const TIP = {thumb:4, index:8, middle:12, ring:16, pinky:20};
+      const PIP = {index:6, middle:10, ring:14, pinky:18};
+      let c=0;
+      ["index","middle","ring","pinky"].forEach(k=>{ if(landmarks[TIP[k]].y < landmarks[PIP[k]].y) c++; });
+      const thumbTip=landmarks[TIP.thumb], thumbIp=landmarks[3];
+      if (handed==="Right"){ if (thumbTip.x > thumbIp.x + 0.03) c++; }
+      else if (handed==="Left"){ if (thumbTip.x < thumbIp.x - 0.03) c++; }
+      return c;
+    }
+
     async function loop(){
       if(!running) return;
       updateFps();
+      ctx.clearRect(0,0,canvas.width,canvas.height);
 
-      // Limpiar overlay
-      ctx.clearRect(0,0,canvas.width, canvas.height);
+      let faces=0, hands=0, fingers=0, expr="–";
 
-      // Face
-      let nFaces = 0; let exprText = "–";
       if (faceLandmarker){
-        const resF = faceLandmarker.detectForVideo(video, performance.now());
-        if (resF && resF.faceLandmarks && resF.faceLandmarks.length){
-          nFaces = resF.faceLandmarks.length;
-          // Dibujar puntos faciales de la primera cara
-          drawLandmarks(resF.faceLandmarks[0], "#4ea1ff", 1.6);
-          // Estimar expresión con blendshapes (primera cara)
-          if (resF.faceBlendshapes && resF.faceBlendshapes.length){
-            exprText = estimateExpression(resF.faceBlendshapes[0]);
+        try{
+          const rf = faceLandmarker.detectForVideo(video, performance.now());
+          if (rf && rf.faceLandmarks && rf.faceLandmarks.length){
+            faces = rf.faceLandmarks.length;
+            drawPoints(rf.faceLandmarks[0], 1.6);
+            if (rf.faceBlendshapes && rf.faceBlendshapes.length){
+              expr = estimateExpression(rf.faceBlendshapes[0]);
+            }
           }
-        }
+        }catch(e){ /* silencioso para no cortar el vídeo */ }
       }
-      mFaces.textContent = String(nFaces);
-      mExpr.textContent = exprText;
 
-      // Hands
-      let nHands = 0; let fingersTotal = 0;
       if (handLandmarker){
-        const resH = handLandmarker.detectForVideo(video, performance.now());
-        if (resH && resH.landmarks && resH.landmarks.length){
-          nHands = resH.landmarks.length;
-          for (let i=0;i<nHands;i++){
-            drawLandmarks(resH.landmarks[i], "#2ecc71", 3);
-            const label = (resH.handedness && resH.handedness[i] && resH.handedness[i][0])
-                          ? resH.handedness[i][0].categoryName : "Unknown";
-            fingersTotal += countFingersForHand(resH.landmarks[i], label);
+        try{
+          const rh = handLandmarker.detectForVideo(video, performance.now());
+          if (rh){
+            const L = rh.landmarks || rh.handLandmarks || [];
+            const H = rh.handedness || rh.handednesses || [];
+            hands = L.length;
+            for (let i=0;i<L.length;i++){
+              drawHand(L[i]);
+              const label = (H[i] && H[i][0] && H[i][0].categoryName) ? H[i][0].categoryName : "Unknown";
+              fingers += countFingersForHand(L[i], label);
+            }
           }
-        }
+        }catch(e){ /* continuar */ }
       }
-      mHands.textContent = String(nHands);
-      mFingers.textContent = String(fingersTotal);
+
+      mFaces.textContent = String(faces);
+      mHands.textContent = String(hands);
+      mFingers.textContent = String(fingers);
+      mExpr.textContent = expr;
 
       requestAnimationFrame(loop);
     }
 
-    btn.addEventListener('click', async ()=>{
+    btn.addEventListener("click", async ()=>{
       btn.disabled = true;
-      await initModels(); // carga wasm y modelos
-      await startCamera();
-      running = true;
-      loop();
+      try{
+        await startCamera();           // 1) cámara primero
+        await initModels();            // 2) modelos (si fallan, seguimos igual)
+        running = true; loop();
+      }catch(e){
+        // Si la cámara no inició, no seguimos
+        setStatus("No se puede continuar sin cámara.", "err");
+      }
     });
   })();
   </script>
