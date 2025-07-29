@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Demo — Cámara + Expresiones (blendshapes) + Recuento de Dedos</title>
+  <title>Demo — Cámara + Emociones (blendshapes) + Dedos + Esqueleto</title>
   <style>
     :root { --bg:#0b1020; --fg:#eaeef7; --accent:#4ea1ff; --ok:#2ecc71; --warn:#ffb020; --err:#ff5566;}
     html,body { height:100%; margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,Segoe UI,Roboto,sans-serif;}
-    .wrap { max-width:1100px; margin:0 auto; padding:1rem; }
+    .wrap { max-width:1200px; margin:0 auto; padding:1rem; }
     h1 { font-size:1.15rem; font-weight:600; margin:0 0 .5rem 0; color:#cfd8ff; }
     .controls { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-bottom:.75rem; }
     button { padding:.6rem 1rem; border:none; border-radius:.6rem; background:var(--accent); color:#00122a; font-weight:700; cursor:pointer; }
     button:disabled { opacity:.6; cursor:not-allowed; }
-    .grid { display:grid; grid-template-columns:1fr 320px; gap:1rem; align-items:start; }
+    .grid { display:grid; grid-template-columns:1fr 360px; gap:1rem; align-items:start; }
     .panel { background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12); border-radius:12px; padding:.75rem; }
     .kv { display:grid; grid-template-columns:1fr auto; gap:.35rem .75rem; font-variant-numeric:tabular-nums; }
     .tag { display:inline-block; padding:.15rem .45rem; border-radius:.5rem; background:#1d2a44; color:#b8cff7; font-size:.85rem; }
@@ -24,12 +24,12 @@
     .status .ok { color:var(--ok); }
     .status .warn { color:var(--warn); }
     .status .err { color:var(--err); }
-    @media (max-width: 900px){ .grid { grid-template-columns: 1fr; } }
+    @media (max-width: 1024px){ .grid { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Demo — Cámara + Expresiones Faciales (blendshapes) + Recuento de Dedos</h1>
+    <h1>Demo — Cámara + Expresiones Faciales (blendshapes) + Recuento de Dedos + Esqueleto (Pose)</h1>
 
     <div class="controls">
       <button id="btnStart">Iniciar cámara</button>
@@ -53,10 +53,10 @@
           <div>Dedos totales (estimados):</div><div id="fingers" class="mono">0</div>
         </div>
         <hr style="border-color:rgba(255,255,255,.15); margin:.75rem 0;">
-        <div><span class="tag">Expresión estimada</span></div>
+        <div><span class="tag">Emoción estimada</span></div>
         <div id="expr" class="mono" style="margin-top:.35rem;">–</div>
         <div class="small" style="margin-top:.75rem;">
-          Consejos:
+          Sugerencias:
           <ul>
             <li>Iluminación frontal uniforme.</li>
             <li>Rostro de frente para *blendshapes* estables.</li>
@@ -67,12 +67,12 @@
     </div>
 
     <p class="small">
-      Si incrustas esta app en un <code>&lt;iframe&gt;</code> (p.ej. Google Sites), añade <code class="mono">allow="camera; microphone"</code>,
-      o abre en pestaña nueva.
+      Si incrustas esto en un <code>&lt;iframe&gt;</code> (p.ej. Google Sites), añade <code class="mono">allow="camera; microphone"</code>,
+      o abre en pestaña nueva para evitar restricciones.
     </p>
   </div>
 
-  <!-- Toda la lógica en un MÓDULO -->
+  <!-- Lógica en módulo ES -->
   <script type="module">
   const $ = (id)=>document.getElementById(id);
   const video = $("video");
@@ -82,172 +82,202 @@
   const mFps = $("fps"), mFaces = $("nfaces"), mHands = $("nhands"), mFingers = $("fingers"), mExpr = $("expr");
   const statusEl = $("status");
 
-  function setStatus(msg, cls=""){ statusEl.innerHTML = `<span class="${cls}">${msg}</span>`; if(cls==="err") console.error(msg); else console.log(msg); }
+  function setStatus(msg, cls=""){ statusEl.innerHTML = `<span class="${cls}">${msg}</span>`; }
 
+  // Estado general
   let running=false, frameCount=0, lastTime=performance.now(), fps=0;
-  let FaceLandmarker=null, HandLandmarker=null, FilesetResolver=null;
-  let faceLandmarker=null, handLandmarker=null;
 
-  // === 1) Importar MediaPipe Tasks Vision (con fallback) ===
-  async function importTasksVision(){
-    setStatus("Importando @mediapipe/tasks-vision…");
-    const v = "0.10.7"; // fija versión para estabilidad
-    const urls = [
-      `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${v}`,
-      `https://unpkg.com/@mediapipe/tasks-vision@${v}`
-    ];
-    let mod = null, lastErr = null;
-    for (const u of urls){
-      try {
-        mod = await import(u);
-        setStatus(`Importado desde ${new URL(u).host}.`, "ok");
-        break;
-      } catch(e){ lastErr = e; }
-    }
-    if (!mod){
-      setStatus("No se pudo importar tasks-vision (CDN bloqueado).", "err");
-      throw lastErr || new Error("ImportFailed");
-    }
-    ({ FilesetResolver, FaceLandmarker, HandLandmarker } = mod);
-  }
+  // Clases (importadas)
+  let FilesetResolver=null, FaceLandmarker=null, HandLandmarker=null, PoseLandmarker=null;
 
-  // === 2) Cámara ===
-  async function startCamera(){
-    setStatus("Solicitando cámara…");
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width:{ideal:1280}, height:{ideal:720}, facingMode:{ideal:"user"} },
-      audio: false
-    });
-    video.srcObject = stream;
-    await video.play();
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
-    setStatus("Cámara iniciada.", "ok");
-  }
+  // Instancias de modelos
+  let faceLandmarker=null, handLandmarker=null, poseLandmarker=null;
 
-    // === 3) Modelos ===
-    async function initModels(){
-      setStatus("Cargando modelos y WASM…");
-      const v = "0.10.7"; // misma versión para el WASM
-      const vision = await FilesetResolver.forVisionTasks(
-        `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${v}/wasm`
-      );
-  
-      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-          delegate: "GPU"
-        },
-        runningMode: "VIDEO",
-        outputFaceBlendshapes: true,
-        numFaces: 1,
-        minFaceDetectionConfidence: 0.5,
-        minFacePresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
-  
-      handLandmarker = await HandLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
-        },
-        runningMode: "VIDEO",
-        numHands: 2,
-        minHandDetectionConfidence: 0.5,
-        minHandPresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
-  
-      setStatus("Modelos listos.", "ok");
-    }
-
-  // === Utilidades de dibujo y métricas ===
-  function drawPoints(points, size=2){
-    ctx.fillStyle = "#4ea1ff";
-    for(const p of points){ ctx.beginPath(); ctx.arc(p.x*canvas.width, p.y*canvas.height, size, 0, Math.PI*2); ctx.fill(); }
-  }
-  function drawHand(points){
-    ctx.fillStyle = "#2ecc71";
-    for(const p of points){ ctx.beginPath(); ctx.arc(p.x*canvas.width, p.y*canvas.height, 3, 0, Math.PI*2); ctx.fill(); }
-  }
+  // ====== 0) Utilidades ======
   function updateFps(){
     frameCount++; const now = performance.now();
     if (now - lastTime >= 1000){ fps = frameCount; frameCount=0; lastTime=now; mFps.textContent = String(fps); }
   }
-  // ====== EMOCIONES (suavizado + histeresis) ======
+  function clamp(x){ return Math.max(0, Math.min(1, x)); }
 
-// Estado para suavizado EMA por blendshape
-const EMA = new Map();
-const ALPHA = 0.35;        // suavizado temporal
-let lastEmotion = "Neutro";
-let lastEmotionFrames = 0; // histeresis por frames
-
-function bs(blend, name){
-  if(!blend || !blend.categories) return 0;
-  const cat = blend.categories.find(c => c.categoryName === name);
-  const raw = cat ? cat.score : 0;
-  // EMA por nombre
-  const prev = EMA.has(name) ? EMA.get(name) : raw;
-  const sm = ALPHA*raw + (1-ALPHA)*prev;
-  EMA.set(name, sm);
-  return sm;
-}
-
-// Devuelve etiqueta: {Neutro, Feliz, Sorprendido, Triste, Enojado}
-function estimateExpression(blend){
-  if(!blend) return "–";
-
-  // Rasgos (suavizados)
-  const smile     = (bs(blend,"mouthSmileLeft") + bs(blend,"mouthSmileRight"))/2;
-  const jawOpen   = bs(blend,"jawOpen");
-  const browUp    = bs(blend,"browInnerUp");
-  const browDown  = (bs(blend,"browDownLeft") + bs(blend,"browDownRight"))/2;
-  const mouthFrown= (bs(blend,"mouthFrownLeft") + bs(blend,"mouthFrownRight"))/2;
-  const mouthPress= (bs(blend,"mouthPressLeft") + bs(blend,"mouthPressRight"))/2;
-  const lipDep    = (bs(blend,"mouthCornerPullDownLeft") + bs(blend,"mouthCornerPullDownRight"))/2    // alias frecuente
-                  || (bs(blend,"mouthLowerDownLeft") + bs(blend,"mouthLowerDownRight"))/2;           // fallback
-  const eyeSquint = (bs(blend,"eyeSquintLeft") + bs(blend,"eyeSquintRight"))/2;
-  const noseSneer = (bs(blend,"noseSneerLeft") + bs(blend,"noseSneerRight"))/2;
-
-  // Puntuaciones simples (0..1 aprox.)
-  const scoreHappy     = clamp( 0.9*smile - 0.3*mouthFrown - 0.2*mouthPress - 0.2*browDown + 0.1*browUp );
-  const scoreSurprised = clamp( 0.7*jawOpen + 0.3*browUp - 0.2*mouthPress );
-  const scoreSad       = clamp( 0.6*lipDep + 0.4*mouthFrown + 0.2*browUp - 0.2*jawOpen );
-  const scoreAngry     = clamp( 0.5*browDown + 0.3*mouthPress + 0.3*noseSneer + 0.2*eyeSquint - 0.1*jawOpen );
-  const scoreNeutral   = 0.2;
-
-  // Soft decision
-  const scores = [
-    ["Feliz / Sonrisa",     scoreHappy],
-    ["Sorprendido",         scoreSurprised],
-    ["Triste",              scoreSad],
-    ["Enojado",             scoreAngry],
-    ["Neutro / Otro",       scoreNeutral],
-  ].sort((a,b)=>b[1]-a[1]);
-
-  const [cand, s] = scores[0];
-  const TH = 0.35;           // umbral mínimo para no declarar emoción si es bajo
-  const DH = 0.10;           // diferencial para cambiar de estado (histeresis)
-  const top2 = scores[1][1];
-
-  let label = (s >= TH) ? cand : "Neutro / Otro";
-
-  // Histeresis: si la nueva emoción no gana por margen, mantener la anterior unos frames
-  if (label !== lastEmotion && (s - top2) < DH && lastEmotionFrames < 8){
-    label = lastEmotion;
-    lastEmotionFrames++;
-  }else{
-    if (label === lastEmotion) lastEmotionFrames = Math.min(30, lastEmotionFrames+1);
-    else lastEmotionFrames = 0, lastEmotion = label;
+  // ====== 1) Importar librería (con fallback) ======
+  async function importTasksVision(){
+    setStatus("Importando @mediapipe/tasks-vision…");
+    const v = "0.10.7";
+    const urls = [
+      `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${v}`,
+      `https://unpkg.com/@mediapipe/tasks-vision@${v}`
+    ];
+    let mod=null, lastErr=null;
+    for (const u of urls){ try{ mod = await import(u); setStatus(`Importado desde ${new URL(u).host}.`, "ok"); break; }catch(e){ lastErr=e; } }
+    if(!mod){ setStatus("No se pudo importar tasks-vision (CDN bloqueado).", "err"); throw lastErr || new Error("ImportFailed"); }
+    ({ FilesetResolver, FaceLandmarker, HandLandmarker, PoseLandmarker } = mod);
   }
-  return label;
-}
-function clamp(x){ return Math.max(0, Math.min(1, x)); }
 
+  // ====== 2) Cámara ======
+  async function startCamera(){
+    setStatus("Solicitando cámara…");
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width:{ideal:1280}, height:{ideal:720}, facingMode:{ideal:"user"} },
+        audio: false
+      });
+      video.srcObject = stream;
+      await video.play();
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 720;
+      setStatus("Cámara iniciada.", "ok");
+    }catch(e){
+      let hint="";
+      if (e && e.name==="NotAllowedError") hint="Permiso denegado. Autoriza la cámara para este sitio.";
+      else if (e && e.name==="NotFoundError") hint="No se encontró un dispositivo de cámara.";
+      else if (e && e.name==="OverconstrainedError") hint="Prueba una resolución más baja.";
+      setStatus(`No se pudo iniciar la cámara: ${e.name || e}. ${hint}`, "err");
+      throw e;
+    }
+  }
 
+  // ====== 3) Modelos (Face + Hand + Pose) ======
+  async function initModels(){
+    setStatus("Cargando modelos y WASM…");
+    const v = "0.10.7";
+    const vision = await FilesetResolver.forVisionTasks(
+      `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${v}/wasm`
+    );
 
+    faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      outputFaceBlendshapes: true,
+      numFaces: 1,
+      minFaceDetectionConfidence: 0.5,
+      minFacePresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
 
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+      },
+      runningMode: "VIDEO",
+      numHands: 2,
+      minHandDetectionConfidence: 0.5,
+      minHandPresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
 
-    
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      numPoses: 1,
+      minPoseDetectionConfidence: 0.5,
+      minPosePresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    setStatus("Modelos listos.", "ok");
+  }
+
+  // ====== 4) Dibujo ======
+  function drawFace(points, size=1.6){
+    ctx.fillStyle = "#4ea1ff";
+    for(const p of points){
+      ctx.beginPath();
+      ctx.arc(p.x*canvas.width, p.y*canvas.height, size, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+  function drawHand(points){
+    ctx.fillStyle = "#2ecc71";
+    for(const p of points){
+      ctx.beginPath();
+      ctx.arc(p.x*canvas.width, p.y*canvas.height, 3, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+  const POSE_CONNECTIONS = [
+    [11,12],[11,23],[12,24],[23,24],            // tronco
+    [11,13],[13,15],[12,14],[14,16],            // brazos
+    [23,25],[25,27],[27,29],[29,31],            // pierna izq
+    [24,26],[26,28],[28,30],[30,32]             // pierna der
+  ];
+  function drawPoseSkeleton(landmarks){
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#9ad1ff";
+    ctx.beginPath();
+    for (const [a,b] of POSE_CONNECTIONS){
+      const p = landmarks[a], q = landmarks[b];
+      if(!p || !q) continue;
+      ctx.moveTo(p.x*canvas.width, p.y*canvas.height);
+      ctx.lineTo(q.x*canvas.width, q.y*canvas.height);
+    }
+    ctx.stroke();
+  }
+
+  // ====== 5) Emociones (EMA + histeresis) ======
+  const EMA = new Map();        // suavizado por blendshape
+  const ALPHA = 0.35;           // 0..1 (más alto = más sensible)
+  let lastEmotion = "Neutro / Otro";
+  let lastEmotionFrames = 0;
+
+  function bs(blend, name){
+    if(!blend || !blend.categories) return 0;
+    const cat = blend.categories.find(c => c.categoryName === name);
+    const raw = cat ? cat.score : 0;
+    const prev = EMA.has(name) ? EMA.get(name) : raw;
+    const sm = ALPHA*raw + (1-ALPHA)*prev;
+    EMA.set(name, sm);
+    return sm;
+  }
+
+  function estimateExpression(blend){
+    if(!blend) return "–";
+    const smile      = (bs(blend,"mouthSmileLeft") + bs(blend,"mouthSmileRight"))/2;
+    const jawOpen    = bs(blend,"jawOpen");
+    const browUp     = bs(blend,"browInnerUp");
+    const browDown   = (bs(blend,"browDownLeft") + bs(blend,"browDownRight"))/2;
+    const mouthFrown = (bs(blend,"mouthFrownLeft") + bs(blend,"mouthFrownRight"))/2;
+    const mouthPress = (bs(blend,"mouthPressLeft") + bs(blend,"mouthPressRight"))/2;
+    const lipDep     = (bs(blend,"mouthCornerPullDownLeft") + bs(blend,"mouthCornerPullDownRight"))/2
+                    || (bs(blend,"mouthLowerDownLeft") + bs(blend,"mouthLowerDownRight"))/2;
+    const eyeSquint  = (bs(blend,"eyeSquintLeft") + bs(blend,"eyeSquintRight"))/2;
+    const noseSneer  = (bs(blend,"noseSneerLeft") + bs(blend,"noseSneerRight"))/2;
+
+    // puntuaciones (0..1 aprox.)
+    const scoreHappy     = clamp( 0.9*smile - 0.3*mouthFrown - 0.2*mouthPress - 0.2*browDown + 0.1*browUp );
+    const scoreSurprised = clamp( 0.7*jawOpen + 0.3*browUp - 0.2*mouthPress );
+    const scoreSad       = clamp( 0.7*lipDep + 0.5*mouthFrown + 0.2*browUp - 0.2*jawOpen );
+    const scoreAngry     = clamp( 0.6*browDown + 0.35*mouthPress + 0.3*noseSneer + 0.2*eyeSquint - 0.1*jawOpen );
+    const scoreNeutral   = 0.2;
+
+    const scores = [
+      ["Feliz / Sonrisa", scoreHappy],
+      ["Sorprendido",     scoreSurprised],
+      ["Triste",          scoreSad],
+      ["Enojado",         scoreAngry],
+      ["Neutro / Otro",   scoreNeutral],
+    ].sort((a,b)=>b[1]-a[1]);
+
+    const [cand, s] = scores[0]; const top2 = scores[1][1];
+    const TH = 0.35, DH = 0.10;  // umbral y diferencial (histeresis)
+    let label = (s >= TH) ? cand : "Neutro / Otro";
+
+    if (label !== lastEmotion && (s - top2) < DH && lastEmotionFrames < 8){
+      label = lastEmotion; lastEmotionFrames++;
+    } else {
+      if (label === lastEmotion) lastEmotionFrames = Math.min(30, lastEmotionFrames+1);
+      else { lastEmotionFrames = 0; lastEmotion = label; }
+    }
+    return label;
+  }
+
+  // ====== 6) Conteo de dedos ======
   function countFingersForHand(landmarks, handed="Unknown"){
     if(!landmarks || landmarks.length!==21) return 0;
     const TIP={thumb:4,index:8,middle:12,ring:16,pinky:20}, PIP={index:6,middle:10,ring:14,pinky:18};
@@ -258,18 +288,20 @@ function clamp(x){ return Math.max(0, Math.min(1, x)); }
     return c;
   }
 
+  // ====== 7) Bucle principal ======
   async function loop(){
     if(!running) return;
     updateFps(); ctx.clearRect(0,0,canvas.width,canvas.height);
 
     let faces=0, hands=0, fingers=0, expr="–";
 
+    // Rostro + blendshapes
     if (faceLandmarker){
       try{
         const rf = faceLandmarker.detectForVideo(video, performance.now());
         if (rf && rf.faceLandmarks && rf.faceLandmarks.length){
           faces = rf.faceLandmarks.length;
-          drawPoints(rf.faceLandmarks[0], 1.6);
+          drawFace(rf.faceLandmarks[0], 1.6);
           if (rf.faceBlendshapes && rf.faceBlendshapes.length){
             expr = estimateExpression(rf.faceBlendshapes[0]);
           }
@@ -277,6 +309,7 @@ function clamp(x){ return Math.max(0, Math.min(1, x)); }
       }catch(_){}
     }
 
+    // Manos
     if (handLandmarker){
       try{
         const rh = handLandmarker.detectForVideo(video, performance.now());
@@ -293,21 +326,31 @@ function clamp(x){ return Math.max(0, Math.min(1, x)); }
       }catch(_){}
     }
 
-    mFaces.textContent = String(faces);
-    mHands.textContent = String(hands);
+    // Esqueleto (pose)
+    if (poseLandmarker){
+      try{
+        const rp = poseLandmarker.detectForVideo(video, performance.now());
+        if (rp && rp.landmarks && rp.landmarks.length){
+          drawPoseSkeleton(rp.landmarks[0]);
+        }
+      }catch(_){}
+    }
+
+    mFaces.textContent   = String(faces);
+    mHands.textContent   = String(hands);
     mFingers.textContent = String(fingers);
-    mExpr.textContent = expr;
+    mExpr.textContent    = expr;
 
     requestAnimationFrame(loop);
   }
 
-  // === Flujo principal ===
+  // ====== 8) Arranque ======
   btn.addEventListener("click", async ()=>{
     btn.disabled = true;
     try{
-      await startCamera();                       // 1) cámara primero
-      await importTasksVision();                 // 2) importar librería
-      await initModels();                        // 3) inicializar modelos (si falla, seguimos con cámara)
+      await startCamera();        // cámara primero
+      await importTasksVision();  // librería
+      await initModels();         // modelos
       running = true; loop();
     }catch(e){
       setStatus(`Error inicializando: ${e && e.message ? e.message : e}`, "err");
