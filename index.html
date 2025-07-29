@@ -4,11 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Demo — Cámara + Expresiones (blendshapes) + Recuento de Dedos</title>
-
-  <!-- MediaPipe Tasks Vision (bundle web) -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision/vision_bundle.js"
-          crossorigin="anonymous"></script>
-
   <style>
     :root { --bg:#0b1020; --fg:#eaeef7; --accent:#4ea1ff; --ok:#2ecc71; --warn:#ffb020; --err:#ff5566;}
     html,body { height:100%; margin:0; background:var(--bg); color:var(--fg); font-family:system-ui,Segoe UI,Roboto,sans-serif;}
@@ -77,63 +72,65 @@
     </p>
   </div>
 
-  <script>
-  (function(){
-    const $ = (id)=>document.getElementById(id);
-    const video = $("video");
-    const canvas = $("overlay");
-    const ctx = canvas.getContext("2d", { alpha:true });
-    const btn = $("btnStart");
-    const mFps = $("fps"), mFaces = $("nfaces"), mHands = $("nhands"), mFingers = $("fingers"), mExpr = $("expr");
-    const statusEl = $("status");
+  <!-- Toda la lógica en un MÓDULO -->
+  <script type="module">
+  const $ = (id)=>document.getElementById(id);
+  const video = $("video");
+  const canvas = $("overlay");
+  const ctx = canvas.getContext("2d", { alpha:true });
+  const btn = $("btnStart");
+  const mFps = $("fps"), mFaces = $("nfaces"), mHands = $("nhands"), mFingers = $("fingers"), mExpr = $("expr");
+  const statusEl = $("status");
 
-    let running = false, frameCount=0, lastTime=performance.now(), fps=0;
-    let faceLandmarker=null, handLandmarker=null;
+  function setStatus(msg, cls=""){ statusEl.innerHTML = `<span class="${cls}">${msg}</span>`; if(cls==="err") console.error(msg); else console.log(msg); }
 
-    function setStatus(msg, cls=""){
-      statusEl.innerHTML = `<span class="${cls}">${msg}</span>`;
-      // también deja el último error en consola para diagnóstico
-      if (cls==="err") console.error("[Estado]", msg);
-      else console.log("[Estado]", msg);
+  let running=false, frameCount=0, lastTime=performance.now(), fps=0;
+  let FaceLandmarker=null, HandLandmarker=null, FilesetResolver=null;
+  let faceLandmarker=null, handLandmarker=null;
+
+  // === 1) Importar MediaPipe Tasks Vision (con fallback) ===
+  async function importTasksVision(){
+    setStatus("Importando @mediapipe/tasks-vision…");
+    const v = "0.10.7"; // fija versión para estabilidad
+    const urls = [
+      `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${v}`,
+      `https://unpkg.com/@mediapipe/tasks-vision@${v}`
+    ];
+    let mod = null, lastErr = null;
+    for (const u of urls){
+      try {
+        mod = await import(u);
+        setStatus(`Importado desde ${new URL(u).host}.`, "ok");
+        break;
+      } catch(e){ lastErr = e; }
     }
-
-    async function startCamera(){
-      setStatus("Solicitando cámara…");
-      try{
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width:{ideal:1280}, height:{ideal:720}, facingMode:{ideal:"user"} },
-          audio: false
-        });
-        video.srcObject = stream;
-        await video.play();
-        canvas.width = video.videoWidth || 1280;
-        canvas.height = video.videoHeight || 720;
-        setStatus("Cámara iniciada.", "ok");
-      }catch(e){
-        let hint = "";
-        if (e && e.name==="NotAllowedError") hint = "Permiso denegado. Autoriza la cámara para este sitio.";
-        else if (e && e.name==="NotFoundError") hint = "No se encontró un dispositivo de cámara.";
-        else if (e && e.name==="OverconstrainedError") hint = "La cámara no soporta la resolución solicitada. Prueba sin 'ideal' o más baja.";
-        setStatus(`No se pudo iniciar la cámara: ${e.name || e}. ${hint}`, "err");
-        throw e;
-      }
+    if (!mod){
+      setStatus("No se pudo importar tasks-vision (CDN bloqueado).", "err");
+      throw lastErr || new Error("ImportFailed");
     }
-
-    <script>
-async function initModels(){
-  setStatus("Cargando modelos (puede tardar)…");
-
-  // ✅ Tomar las clases desde el objeto global window
-  const g = window;
-  if (!g || !g.FilesetResolver || !g.FaceLandmarker || !g.HandLandmarker){
-    setStatus("MediaPipe Tasks no está disponible en 'window'. Revisa el <script> vision_bundle.js o el orden de carga.", "err");
-    throw new Error("TasksVisionGlobalsMissing");
+    ({ FilesetResolver, FaceLandmarker, HandLandmarker } = mod);
   }
-  const { FilesetResolver, FaceLandmarker, HandLandmarker } = g;
 
-  try{
+  // === 2) Cámara ===
+  async function startCamera(){
+    setStatus("Solicitando cámara…");
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width:{ideal:1280}, height:{ideal:720}, facingMode:{ideal:"user"} },
+      audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    setStatus("Cámara iniciada.", "ok");
+  }
+
+  // === 3) Modelos ===
+  async function initModels(){
+    setStatus("Cargando modelos y WASM…");
+    const v = "0.10.7"; // misma versión para el WASM
     const vision = await FilesetResolver.forVisionTasks(
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+      `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${v}/wasm`
     );
 
     faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
@@ -161,117 +158,94 @@ async function initModels(){
     });
 
     setStatus("Modelos listos.", "ok");
-  }catch(e){
-    setStatus(`Modelos no cargaron: ${e && e.message ? e.message : e}. Continuando solo con cámara.`, "warn");
   }
-}
-</script>
 
+  // === Utilidades de dibujo y métricas ===
+  function drawPoints(points, size=2){
+    ctx.fillStyle = "#4ea1ff";
+    for(const p of points){ ctx.beginPath(); ctx.arc(p.x*canvas.width, p.y*canvas.height, size, 0, Math.PI*2); ctx.fill(); }
+  }
+  function drawHand(points){
+    ctx.fillStyle = "#2ecc71";
+    for(const p of points){ ctx.beginPath(); ctx.arc(p.x*canvas.width, p.y*canvas.height, 3, 0, Math.PI*2); ctx.fill(); }
+  }
+  function updateFps(){
+    frameCount++; const now = performance.now();
+    if (now - lastTime >= 1000){ fps = frameCount; frameCount=0; lastTime=now; mFps.textContent = String(fps); }
+  }
+  function estimateExpression(blend){
+    if(!blend || !blend.categories || !blend.categories.length) return "–";
+    const s=(n)=>{ const c=blend.categories.find(x=>x.categoryName===n); return c?c.score:0; };
+    const smile=(s("mouthSmileLeft")+s("mouthSmileRight"))/2, open=s("jawOpen"), brow=s("browInnerUp");
+    if (smile>0.5 && open<0.4) return "Feliz / Sonrisa";
+    if (open>0.6 && brow>0.3) return "Sorprendido";
+    return "Neutro / Otro";
+  }
+  function countFingersForHand(landmarks, handed="Unknown"){
+    if(!landmarks || landmarks.length!==21) return 0;
+    const TIP={thumb:4,index:8,middle:12,ring:16,pinky:20}, PIP={index:6,middle:10,ring:14,pinky:18};
+    let c=0; ["index","middle","ring","pinky"].forEach(k=>{ if(landmarks[TIP[k]].y < landmarks[PIP[k]].y) c++; });
+    const thumbTip=landmarks[TIP.thumb], thumbIp=landmarks[3];
+    if (handed==="Right"){ if (thumbTip.x > thumbIp.x + 0.03) c++; }
+    else if (handed==="Left"){ if (thumbTip.x < thumbIp.x - 0.03) c++; }
+    return c;
+  }
 
-    function drawPoints(points, size=2.5){
-      ctx.fillStyle = "#4ea1ff";
-      for(const p of points){
-        ctx.beginPath();
-        ctx.arc(p.x * canvas.width, p.y * canvas.height, size, 0, Math.PI*2);
-        ctx.fill();
-      }
-    }
+  async function loop(){
+    if(!running) return;
+    updateFps(); ctx.clearRect(0,0,canvas.width,canvas.height);
 
-    function drawHand(points){
-      ctx.fillStyle = "#2ecc71";
-      for(const p of points){
-        ctx.beginPath();
-        ctx.arc(p.x * canvas.width, p.y * canvas.height, 3, 0, Math.PI*2);
-        ctx.fill();
-      }
-    }
+    let faces=0, hands=0, fingers=0, expr="–";
 
-    function updateFps(){
-      frameCount++;
-      const now = performance.now();
-      if (now - lastTime >= 1000){
-        fps = frameCount; frameCount = 0; lastTime = now;
-        mFps.textContent = String(fps);
-      }
-    }
-
-    function estimateExpression(blend){
-      if(!blend || !blend.categories || !blend.categories.length) return "–";
-      const s = (n)=>{ const c=blend.categories.find(x=>x.categoryName===n); return c?c.score:0; };
-      const smile = (s("mouthSmileLeft")+s("mouthSmileRight"))/2, open=s("jawOpen"), brow=s("browInnerUp");
-      if (smile>0.5 && open<0.4) return "Feliz / Sonrisa";
-      if (open>0.6 && brow>0.3) return "Sorprendido";
-      return "Neutro / Otro";
-    }
-
-    function countFingersForHand(landmarks, handed="Unknown"){
-      if(!landmarks || landmarks.length!==21) return 0;
-      const TIP = {thumb:4, index:8, middle:12, ring:16, pinky:20};
-      const PIP = {index:6, middle:10, ring:14, pinky:18};
-      let c=0;
-      ["index","middle","ring","pinky"].forEach(k=>{ if(landmarks[TIP[k]].y < landmarks[PIP[k]].y) c++; });
-      const thumbTip=landmarks[TIP.thumb], thumbIp=landmarks[3];
-      if (handed==="Right"){ if (thumbTip.x > thumbIp.x + 0.03) c++; }
-      else if (handed==="Left"){ if (thumbTip.x < thumbIp.x - 0.03) c++; }
-      return c;
-    }
-
-    async function loop(){
-      if(!running) return;
-      updateFps();
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-
-      let faces=0, hands=0, fingers=0, expr="–";
-
-      if (faceLandmarker){
-        try{
-          const rf = faceLandmarker.detectForVideo(video, performance.now());
-          if (rf && rf.faceLandmarks && rf.faceLandmarks.length){
-            faces = rf.faceLandmarks.length;
-            drawPoints(rf.faceLandmarks[0], 1.6);
-            if (rf.faceBlendshapes && rf.faceBlendshapes.length){
-              expr = estimateExpression(rf.faceBlendshapes[0]);
-            }
-          }
-        }catch(e){ /* silencioso para no cortar el vídeo */ }
-      }
-
-      if (handLandmarker){
-        try{
-          const rh = handLandmarker.detectForVideo(video, performance.now());
-          if (rh){
-            const L = rh.landmarks || rh.handLandmarks || [];
-            const H = rh.handedness || rh.handednesses || [];
-            hands = L.length;
-            for (let i=0;i<L.length;i++){
-              drawHand(L[i]);
-              const label = (H[i] && H[i][0] && H[i][0].categoryName) ? H[i][0].categoryName : "Unknown";
-              fingers += countFingersForHand(L[i], label);
-            }
-          }
-        }catch(e){ /* continuar */ }
-      }
-
-      mFaces.textContent = String(faces);
-      mHands.textContent = String(hands);
-      mFingers.textContent = String(fingers);
-      mExpr.textContent = expr;
-
-      requestAnimationFrame(loop);
-    }
-
-    btn.addEventListener("click", async ()=>{
-      btn.disabled = true;
+    if (faceLandmarker){
       try{
-        await startCamera();           // 1) cámara primero
-        await initModels();            // 2) modelos (si fallan, seguimos igual)
-        running = true; loop();
-      }catch(e){
-        // Si la cámara no inició, no seguimos
-        setStatus("No se puede continuar sin cámara.", "err");
-      }
-    });
-  })();
+        const rf = faceLandmarker.detectForVideo(video, performance.now());
+        if (rf && rf.faceLandmarks && rf.faceLandmarks.length){
+          faces = rf.faceLandmarks.length;
+          drawPoints(rf.faceLandmarks[0], 1.6);
+          if (rf.faceBlendshapes && rf.faceBlendshapes.length){
+            expr = estimateExpression(rf.faceBlendshapes[0]);
+          }
+        }
+      }catch(_){}
+    }
+
+    if (handLandmarker){
+      try{
+        const rh = handLandmarker.detectForVideo(video, performance.now());
+        if (rh){
+          const L = rh.landmarks || rh.handLandmarks || [];
+          const H = rh.handedness || rh.handednesses || [];
+          hands = L.length;
+          for (let i=0;i<L.length;i++){
+            drawHand(L[i]);
+            const label = (H[i] && H[i][0] && H[i][0].categoryName) ? H[i][0].categoryName : "Unknown";
+            fingers += countFingersForHand(L[i], label);
+          }
+        }
+      }catch(_){}
+    }
+
+    mFaces.textContent = String(faces);
+    mHands.textContent = String(hands);
+    mFingers.textContent = String(fingers);
+    mExpr.textContent = expr;
+
+    requestAnimationFrame(loop);
+  }
+
+  // === Flujo principal ===
+  btn.addEventListener("click", async ()=>{
+    btn.disabled = true;
+    try{
+      await startCamera();                       // 1) cámara primero
+      await importTasksVision();                 // 2) importar librería
+      await initModels();                        // 3) inicializar modelos (si falla, seguimos con cámara)
+      running = true; loop();
+    }catch(e){
+      setStatus(`Error inicializando: ${e && e.message ? e.message : e}`, "err");
+    }
+  });
   </script>
 </body>
 </html>
