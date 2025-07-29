@@ -173,14 +173,81 @@
     frameCount++; const now = performance.now();
     if (now - lastTime >= 1000){ fps = frameCount; frameCount=0; lastTime=now; mFps.textContent = String(fps); }
   }
-  function estimateExpression(blend){
-    if(!blend || !blend.categories || !blend.categories.length) return "–";
-    const s=(n)=>{ const c=blend.categories.find(x=>x.categoryName===n); return c?c.score:0; };
-    const smile=(s("mouthSmileLeft")+s("mouthSmileRight"))/2, open=s("jawOpen"), brow=s("browInnerUp");
-    if (smile>0.5 && open<0.4) return "Feliz / Sonrisa";
-    if (open>0.6 && brow>0.3) return "Sorprendido";
-    return "Neutro / Otro";
+  // ====== EMOCIONES (suavizado + histeresis) ======
+
+// Estado para suavizado EMA por blendshape
+const EMA = new Map();
+const ALPHA = 0.35;        // suavizado temporal
+let lastEmotion = "Neutro";
+let lastEmotionFrames = 0; // histeresis por frames
+
+function bs(blend, name){
+  if(!blend || !blend.categories) return 0;
+  const cat = blend.categories.find(c => c.categoryName === name);
+  const raw = cat ? cat.score : 0;
+  // EMA por nombre
+  const prev = EMA.has(name) ? EMA.get(name) : raw;
+  const sm = ALPHA*raw + (1-ALPHA)*prev;
+  EMA.set(name, sm);
+  return sm;
+}
+
+// Devuelve etiqueta: {Neutro, Feliz, Sorprendido, Triste, Enojado}
+function estimateExpression(blend){
+  if(!blend) return "–";
+
+  // Rasgos (suavizados)
+  const smile     = (bs(blend,"mouthSmileLeft") + bs(blend,"mouthSmileRight"))/2;
+  const jawOpen   = bs(blend,"jawOpen");
+  const browUp    = bs(blend,"browInnerUp");
+  const browDown  = (bs(blend,"browDownLeft") + bs(blend,"browDownRight"))/2;
+  const mouthFrown= (bs(blend,"mouthFrownLeft") + bs(blend,"mouthFrownRight"))/2;
+  const mouthPress= (bs(blend,"mouthPressLeft") + bs(blend,"mouthPressRight"))/2;
+  const lipDep    = (bs(blend,"mouthCornerPullDownLeft") + bs(blend,"mouthCornerPullDownRight"))/2    // alias frecuente
+                  || (bs(blend,"mouthLowerDownLeft") + bs(blend,"mouthLowerDownRight"))/2;           // fallback
+  const eyeSquint = (bs(blend,"eyeSquintLeft") + bs(blend,"eyeSquintRight"))/2;
+  const noseSneer = (bs(blend,"noseSneerLeft") + bs(blend,"noseSneerRight"))/2;
+
+  // Puntuaciones simples (0..1 aprox.)
+  const scoreHappy     = clamp( 0.9*smile - 0.3*mouthFrown - 0.2*mouthPress - 0.2*browDown + 0.1*browUp );
+  const scoreSurprised = clamp( 0.7*jawOpen + 0.3*browUp - 0.2*mouthPress );
+  const scoreSad       = clamp( 0.6*lipDep + 0.4*mouthFrown + 0.2*browUp - 0.2*jawOpen );
+  const scoreAngry     = clamp( 0.5*browDown + 0.3*mouthPress + 0.3*noseSneer + 0.2*eyeSquint - 0.1*jawOpen );
+  const scoreNeutral   = 0.2;
+
+  // Soft decision
+  const scores = [
+    ["Feliz / Sonrisa",     scoreHappy],
+    ["Sorprendido",         scoreSurprised],
+    ["Triste",              scoreSad],
+    ["Enojado",             scoreAngry],
+    ["Neutro / Otro",       scoreNeutral],
+  ].sort((a,b)=>b[1]-a[1]);
+
+  const [cand, s] = scores[0];
+  const TH = 0.35;           // umbral mínimo para no declarar emoción si es bajo
+  const DH = 0.10;           // diferencial para cambiar de estado (histeresis)
+  const top2 = scores[1][1];
+
+  let label = (s >= TH) ? cand : "Neutro / Otro";
+
+  // Histeresis: si la nueva emoción no gana por margen, mantener la anterior unos frames
+  if (label !== lastEmotion && (s - top2) < DH && lastEmotionFrames < 8){
+    label = lastEmotion;
+    lastEmotionFrames++;
+  }else{
+    if (label === lastEmotion) lastEmotionFrames = Math.min(30, lastEmotionFrames+1);
+    else lastEmotionFrames = 0, lastEmotion = label;
   }
+  return label;
+}
+function clamp(x){ return Math.max(0, Math.min(1, x)); }
+
+
+
+
+
+    
   function countFingersForHand(landmarks, handed="Unknown"){
     if(!landmarks || landmarks.length!==21) return 0;
     const TIP={thumb:4,index:8,middle:12,ring:16,pinky:20}, PIP={index:6,middle:10,ring:14,pinky:18};
