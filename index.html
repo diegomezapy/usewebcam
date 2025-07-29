@@ -119,44 +119,54 @@
       }
     }
 
-    async function initModels(){
-      setStatus("Cargando modelos (puede tardar)…");
-      try{
-        // Clases globales expuestas por vision_bundle.js
-        const vision = await FilesetResolver.forVisionTasks(
-          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
-        );
+    <script>
+async function initModels(){
+  setStatus("Cargando modelos (puede tardar)…");
 
-        faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-            delegate: "GPU"
-          },
-          runningMode: "VIDEO",
-          outputFaceBlendshapes: true,
-          numFaces: 1,
-          minFaceDetectionConfidence: 0.5,
-          minFacePresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5
-        });
+  // ✅ Tomar las clases desde el objeto global window
+  const g = window;
+  if (!g || !g.FilesetResolver || !g.FaceLandmarker || !g.HandLandmarker){
+    setStatus("MediaPipe Tasks no está disponible en 'window'. Revisa el <script> vision_bundle.js o el orden de carga.", "err");
+    throw new Error("TasksVisionGlobalsMissing");
+  }
+  const { FilesetResolver, FaceLandmarker, HandLandmarker } = g;
 
-        handLandmarker = await HandLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
-          },
-          runningMode: "VIDEO",
-          numHands: 2,
-          minHandDetectionConfidence: 0.5,
-          minHandPresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5
-        });
+  try{
+    const vision = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm"
+    );
 
-        setStatus("Modelos listos.", "ok");
-      }catch(e){
-        setStatus(`Modelos no cargaron: ${e && e.message ? e.message : e}. Continuando solo con cámara.`, "warn");
-        // Permitimos que el loop corra con cámara aunque no haya modelos
-      }
-    }
+    faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      outputFaceBlendshapes: true,
+      numFaces: 1,
+      minFaceDetectionConfidence: 0.5,
+      minFacePresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    handLandmarker = await HandLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+      },
+      runningMode: "VIDEO",
+      numHands: 2,
+      minHandDetectionConfidence: 0.5,
+      minHandPresenceConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    setStatus("Modelos listos.", "ok");
+  }catch(e){
+    setStatus(`Modelos no cargaron: ${e && e.message ? e.message : e}. Continuando solo con cámara.`, "warn");
+  }
+}
+</script>
+
 
     function drawPoints(points, size=2.5){
       ctx.fillStyle = "#4ea1ff";
