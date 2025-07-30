@@ -182,7 +182,7 @@
   const mFps=$("fps"), mFaces=$("nfaces"), mHands=$("nhands"), mFingers=$("fingers"), mExpr=$("expr");
   const statusEl=document.querySelector(".camera-header .status");
 
-  /* ======== Estadísticas y gráficos (actividad original) ======== */
+  /* ======== Estadísticas y gráficos ======== */
   const mostFrequent=$("mostFrequent"), leastFrequent=$("leastFrequent"),
         avgDuration=$("avgDuration"), lastChange=$("lastChange"),
         fingerAvg=$("fingerAvg"), fingerMax=$("fingerMax"),
@@ -193,7 +193,7 @@
   const emotionTypes=['😃 Feliz','😮 Sorprendido','😢 Triste','😠 Enojado','😐 Neutro'];
   emotionTypes.forEach(t=>emotionDuration[t]=0);
 
-  // === Gráfico de emociones sin "Neutro" ===
+  /* === Emociones sin "Neutro" en el gráfico === */
   const EMO_LABELS_PLOT = ['Feliz','Sorprendido','Triste','Enojado'];
   const emotionChart=new Chart($("emotionChart"),{
     type:'pie',
@@ -202,7 +202,7 @@
     options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:'#f8fafc',font:{size:12}}}}}
   });
 
-  // === Gráfico de dedos sin la barra de "0" ===
+  /* === Dedos sin la barra de "0" === */
   const FINGER_LABELS_PLOT = ['1','2','3','4','5','6+'];
   const fingerChart=new Chart($("fingerChart"),{
     type:'bar',
@@ -217,9 +217,9 @@
   let FilesetResolver=null, FaceLandmarker=null, HandLandmarker=null, PoseLandmarker=null;
   let faceLandmarker=null, handLandmarker=null, poseLandmarker=null;
 
-  // --- Parámetros de muestreo/retención ---
-  const SAMPLE_INTERVAL_MS = 1500; // 1.5 s entre muestras
-  const MAX_HISTORY = 1000;        // conservar último millar
+  // --- Muestreo/retención ---
+  const SAMPLE_INTERVAL_MS = 1500;
+  const MAX_HISTORY = 1000;
   let nextSampleAt = performance.now() + SAMPLE_INTERVAL_MS;
 
   function updateFps(){
@@ -290,7 +290,7 @@
     ctx.stroke();
   }
 
-  /* ======== Emociones (EMA + histeresis) — ajustada para Tristeza/Furia ======== */
+  /* ======== Emociones (EMA + histeresis) — mejorada para tristeza/furia ======== */
   const EMA=new Map(), ALPHA=0.35; let lastEmotion="😐 Neutro", lastEmotionFrames=0;
   function bs(blend,name){
     if(!blend||!blend.categories) return 0;
@@ -300,34 +300,32 @@
   }
   function estimateExpression(blend){
     if(!blend) return "–";
-    // Rasgos (labios/cejas + soporte)
     const smile   = (bs(blend,"mouthSmileLeft")+bs(blend,"mouthSmileRight"))/2;
     const jawOpen = bs(blend,"jawOpen");
+
     const browInUp   = bs(blend,"browInnerUp");
     const browDown   = (bs(blend,"browDownLeft")+bs(blend,"browDownRight"))/2;
     const browOutUp  = (bs(blend,"browOuterUpLeft")+bs(blend,"browOuterUpRight"))/2;
+
     const mouthFrown = (bs(blend,"mouthFrownLeft")+bs(blend,"mouthFrownRight"))/2;
     const mouthPress = (bs(blend,"mouthPressLeft")+bs(blend,"mouthPressRight"))/2;
     const cornerDown = (bs(blend,"mouthCornerPullDownLeft")+bs(blend,"mouthCornerPullDownRight"))/2;
     const lowerDown  = (bs(blend,"mouthLowerDownLeft")+bs(blend,"mouthLowerDownRight"))/2;
+
     const eyeSquint = (bs(blend,"eyeSquintLeft")+bs(blend,"eyeSquintRight"))/2;
     const noseSneer = (bs(blend,"noseSneerLeft")+bs(blend,"noseSneerRight"))/2;
 
-    // Tristeza (labios hacia abajo + ceja interna elevada)
     let scoreSad = 0.9*cornerDown + 0.6*mouthFrown + 0.5*browInUp + 0.2*browOutUp
                    - 0.20*smile - 0.10*jawOpen;
     if (cornerDown>0.5 && browInUp>0.4) scoreSad += 0.08;
 
-    // Furia (cejas bajas + labios presionados + aletas nasales + ojos entrecerrados)
     let scoreAng = 0.9*browDown + 0.6*mouthPress + 0.5*noseSneer + 0.3*eyeSquint
                    - 0.20*smile - 0.15*jawOpen;
     if (browDown>0.5 && mouthPress>0.4) scoreAng += 0.08;
 
-    // Alegría y sorpresa
     const scoreHap = clamp( 0.9*smile - 0.3*mouthFrown - 0.2*mouthPress - 0.2*browDown + 0.1*browInUp );
     const scoreSur = clamp( 0.7*jawOpen + 0.3*browInUp - 0.2*mouthPress );
 
-    // Neutro bajo para evitar dominancia
     let scoreNeu = 0.05;
 
     scoreSad = clamp(scoreSad); scoreAng = clamp(scoreAng);
@@ -371,18 +369,18 @@
     return count;
   }
 
-  /* ======== NUEVA ACTIVIDAD: Estatura & Peso ======== */
-  let scalePxPerCm = null;         // pixeles por cm (de la mano)
+  /* ======== Estatura & Peso (calibración por mano) ======== */
+  let scalePxPerCm = null;
   let lastCalibTime = 0;
-  const CAL_HAND_CM = 15.0;        // índice–meñique
-  const CAL_SPAN_MIN_PX = 30;      // para evitar ruido
-  const HEIGHT_RANGE = [120, 200]; // cm plausibles
-  const WEIGHT_RANGE = [25, 150];  // kg plausibles
+  const CAL_HAND_CM = 15.0;
+  const CAL_SPAN_MIN_PX = 30;
+  const HEIGHT_RANGE = [120, 200];
+  const WEIGHT_RANGE = [25, 150];
 
-  let heightCalib = 1.0;  // multiplicador fino de estatura
-  let weightCalib = 1.0;  // multiplicador fino de peso
+  let heightCalib = 1.0;
+  let weightCalib = 1.0;
 
-  const hwSamples = []; // {h,w,bmi}
+  const hwSamples = [];
   (function injectHWChart(){
     const host = document.querySelector('.charts-section');
     const card = document.createElement('div');
@@ -431,13 +429,13 @@
     const L11=poseLmk[11], R12=poseLmk[12], L23=poseLmk[23], R24=poseLmk[24];
     if(!(L11&&R12&&L23&&R24) || !scalePxPerCm) return null;
     const sh = Math.abs((L11.x - R12.x) * canvas.width);
-    const wa = Math.abs((L23.x - R24.x) * canvas.width);
+    thewa = Math.abs((L23.x - R24.x) * canvas.width);
+    const wa = thewa; // manter legibilidad
     return ((sh + wa) / 2) / scalePxPerCm;
   }
 
   function estimateWeightKg(heightCm, widthCm){
-    let w = (1.8 * widthCm + 0.25 * heightCm - 30) * weightCalib;
-    return w;
+    return (1.8 * widthCm + 0.25 * heightCm - 30) * weightCalib;
   }
   function clip(v,[a,b]){ return Math.max(a, Math.min(b, v)); }
 
@@ -469,9 +467,9 @@
     hwChart.update('none');
   }
 
-  /* ======== Actualización de estadísticas (actividad original) ======== */
+  /* ======== Actualización de estadísticas ======== */
   function updateStats(){
-    // Emociones: contar solo no-neutras para el gráfico
+    // Emociones: contar solo NO neutras para el gráfico
     const mapPlot = {
       '😃 Feliz':'Feliz', '😮 Sorprendido':'Sorprendido',
       '😢 Triste':'Triste', '😠 Enojado':'Enojado'
@@ -481,14 +479,13 @@
     emotionChart.data.datasets[0].data = EMO_LABELS_PLOT.map(k => emotionCountsObj[k]);
     emotionChart.update('none');
 
-    // Dedos: excluir cero en el gráfico
+    // Dedos: excluir 0 en el gráfico
     const fingerCounts=[0,0,0,0,0,0,0];
     fingerHistory.forEach(c=>{ if(c<=5) fingerCounts[c]++; else fingerCounts[6]++; });
-    const fingerCountsPlot = fingerCounts.slice(1); // [1..5, 6+]
-    fingerChart.data.datasets[0].data = fingerCountsPlot;
+    fingerChart.data.datasets[0].data = fingerCounts.slice(1);
     fingerChart.update('none');
 
-    // Frecuencias y duración (se mantiene para todas, incl. neutro)
+    // Estadísticas generales (incluyen Neutro en los cálculos textuales)
     const freq={}; emotionTypes.forEach(t=>freq[t]=0); emotionHistory.forEach(e=>freq[e]++);
     const sorted=Object.entries(freq).sort((a,b)=>b[1]-a[1]);
     mostFrequent.textContent=sorted[0]?.[0]||'-';
@@ -551,7 +548,7 @@
       }catch(_){}
     }
 
-    // Pose (para altura/peso)
+    // Pose → altura/peso
     let heightCm=null, widthCm=null, weightKg=null, bmi=null;
     if(poseLandmarker){
       try{
@@ -572,20 +569,20 @@
       }catch(_){}
     }
 
-    // KPIs originales
+    // KPIs
     mFaces.textContent=String(faces);
     mHands.textContent=String(hands);
     mFingers.textContent=String(fingers);
     mExpr.textContent=expr;
 
-    // Duración emoción (sin doble conteo)
+    // Duración emoción
     const nowTS=Date.now();
     if(expr!=="–" && expr!==lastEmotionLabel){
       emotionDuration[lastEmotionLabel]+= nowTS - currentEmotionStart;
       currentEmotionStart=nowTS; lastEmotionChange=nowTS; lastEmotionLabel=expr;
     }
 
-    // --- Muestreo temporizado (1.5 s) para ambas actividades ---
+    // Muestreo 1.5 s
     const t = performance.now();
     if (t >= nextSampleAt) {
       if (expr !== "–") emotionHistory.push(expr);
@@ -617,7 +614,6 @@
     }
   });
 </script>
-
 
 </body>
 </html>
