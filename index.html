@@ -175,255 +175,270 @@
     <footer>Laboratorio de Emociones Matemáticas © 2025 - FACEN UNA </footer>
   </div>
 
-  <script type="module">
-    const $ = (id)=>document.getElementById(id);
-    const video=$("video"), canvas=$("overlay"), ctx=canvas.getContext("2d",{alpha:true});
-    const btn=$("btnStart");
-    const mFps=$("fps"), mFaces=$("nfaces"), mHands=$("nhands"), mFingers=$("fingers"), mExpr=$("expr");
-    const statusEl=document.querySelector(".camera-header .status");
+<script type="module">
+  const $ = (id)=>document.getElementById(id);
+  const video=$("video"), canvas=$("overlay"), ctx=canvas.getContext("2d",{alpha:true});
+  const btn=$("btnStart");
+  const mFps=$("fps"), mFaces=$("nfaces"), mHands=$("nhands"), mFingers=$("fingers"), mExpr=$("expr");
+  const statusEl=document.querySelector(".camera-header .status");
 
-    /* ======== Estadísticas y gráficos ======== */
-    const mostFrequent=$("mostFrequent"), leastFrequent=$("leastFrequent"),
-          avgDuration=$("avgDuration"), lastChange=$("lastChange"),
-          fingerAvg=$("fingerAvg"), fingerMax=$("fingerMax"),
-          fingerMin=$("fingerMin"), fingerTotal=$("fingerTotal");
+  /* ======== Estadísticas y gráficos ======== */
+  const mostFrequent=$("mostFrequent"), leastFrequent=$("leastFrequent"),
+        avgDuration=$("avgDuration"), lastChange=$("lastChange"),
+        fingerAvg=$("fingerAvg"), fingerMax=$("fingerMax"),
+        fingerMin=$("fingerMin"), fingerTotal=$("fingerTotal");
 
-    const emotionHistory=[], fingerHistory=[], emotionDuration={};
-    let lastEmotionChange=0, currentEmotionStart=Date.now();
+  const emotionHistory=[], fingerHistory=[], emotionDuration={};
+  let lastEmotionChange=0, currentEmotionStart=Date.now();
 
-    const emotionTypes=['😃 Feliz','😮 Sorprendido','😢 Triste','😠 Enojado','😐 Neutro'];
-    emotionTypes.forEach(t=>emotionDuration[t]=0);
+  const emotionTypes=['😃 Feliz','😮 Sorprendido','😢 Triste','😠 Enojado','😐 Neutro'];
+  emotionTypes.forEach(t=>emotionDuration[t]=0);
 
-    const emotionChart=new Chart($("emotionChart"),{
-      type:'pie',
-      data:{labels:['Feliz','Sorprendido','Triste','Enojado','Neutro'],
-        datasets:[{data:[0,0,0,0,0],backgroundColor:['#4ea1ff','#f9a826','#2ecc71','#ff6b6b','#cbd5e1'],borderWidth:0}]},
-      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:'#f8fafc',font:{size:12}}}}}
+  const emotionChart=new Chart($("emotionChart"),{
+    type:'pie',
+    data:{labels:['Feliz','Sorprendido','Triste','Enojado','Neutro'],
+      datasets:[{data:[0,0,0,0,0],backgroundColor:['#4ea1ff','#f9a826','#2ecc71','#ff6b6b','#cbd5e1'],borderWidth:0}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:'#f8fafc',font:{size:12}}}}}
+  });
+  const fingerChart=new Chart($("fingerChart"),{
+    type:'bar',
+    data:{labels:['0','1','2','3','4','5','6+'],datasets:[{label:'Conteo',data:[0,0,0,0,0,0,0],backgroundColor:'#4ea1ff',borderWidth:0}]},
+    options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,ticks:{color:'#f8fafc'},grid:{color:'rgba(255,255,255,.1)'}},x:{ticks:{color:'#f8fafc'},grid:{display:false}}},plugins:{legend:{display:false}}}
+  });
+
+  function setStatus(msg, cls=""){ statusEl.textContent=msg; statusEl.className=`status ${cls}`; }
+
+  /* ======== Estado y librerías ======== */
+  let running=false, frameCount=0, lastTime=performance.now(), fps=0;
+  let FilesetResolver=null, FaceLandmarker=null, HandLandmarker=null, PoseLandmarker=null;
+  let faceLandmarker=null, handLandmarker=null, poseLandmarker=null;
+
+  // --- Parámetros de muestreo/retención ---
+  const SAMPLE_INTERVAL_MS = 1500; // 1.5 s entre muestras
+  const MAX_HISTORY = 1000;        // conservar último millar de observaciones
+  let nextSampleAt = performance.now() + SAMPLE_INTERVAL_MS;
+
+  function updateFps(){
+    frameCount++; const now=performance.now();
+    if(now-lastTime>=1000){ fps=frameCount; frameCount=0; lastTime=now; mFps.textContent=String(fps); }
+  }
+  function clamp(x){ return Math.max(0,Math.min(1,x)); }
+
+  async function importTasksVision(){
+    setStatus("Importando @mediapipe/tasks-vision…","warn");
+    const v="0.10.7";
+    const urls=[`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${v}`,`https://unpkg.com/@mediapipe/tasks-vision@${v}`];
+    let mod=null,lastErr=null;
+    for(const u of urls){ try{ mod=await import(u); setStatus(`Importado desde ${new URL(u).host}.`,"ok"); break; }catch(e){ lastErr=e; } }
+    if(!mod){ setStatus("No se pudo importar tasks-vision.","err"); throw lastErr||new Error("ImportFailed"); }
+    ({FilesetResolver,FaceLandmarker,HandLandmarker,PoseLandmarker}=mod);
+  }
+
+  async function startCamera(){
+    setStatus("Solicitando cámara…","warn");
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video:{width:{ideal:1280},height:{ideal:720},facingMode:{ideal:"user"}}, audio:false
     });
-    const fingerChart=new Chart($("fingerChart"),{
-      type:'bar',
-      data:{labels:['0','1','2','3','4','5','6+'],datasets:[{label:'Conteo',data:[0,0,0,0,0,0,0],backgroundColor:'#4ea1ff',borderWidth:0}]},
-      options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,ticks:{color:'#f8fafc'},grid:{color:'rgba(255,255,255,.1)'}},x:{ticks:{color:'#f8fafc'},grid:{display:false}}},plugins:{legend:{display:false}}}
+    video.srcObject=stream;
+    await video.play();
+    resizeCanvas(); setStatus("Cámara iniciada.","ok");
+  }
+
+  function resizeCanvas(){
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.max(640, Math.round(rect.width));
+    canvas.height= Math.max(360, Math.round(rect.height));
+  }
+  new ResizeObserver(resizeCanvas).observe(document.querySelector(".camera-stage"));
+
+  async function initModels(){
+    setStatus("Cargando modelos y WASM…","warn");
+    const v="0.10.7";
+    const vision=await FilesetResolver.forVisionTasks(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${v}/wasm`);
+    faceLandmarker = await FaceLandmarker.createFromOptions(vision,{
+      baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",delegate:"GPU"},
+      runningMode:"VIDEO",outputFaceBlendshapes:true,numFaces:1,minFaceDetectionConfidence:.5,minFacePresenceConfidence:.5,minTrackingConfidence:.5
     });
+    handLandmarker = await HandLandmarker.createFromOptions(vision,{
+      baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"},
+      runningMode:"VIDEO",numHands:2,minHandDetectionConfidence:.5,minHandPresenceConfidence:.5,minTrackingConfidence:.5
+    });
+    poseLandmarker = await PoseLandmarker.createFromOptions(vision,{
+      baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",delegate:"GPU"},
+      runningMode:"VIDEO",numPoses:1,minPoseDetectionConfidence:.5,minPosePresenceConfidence:.5,minTrackingConfidence:.5
+    });
+    setStatus("Modelos listos.","ok");
+  }
 
-    function setStatus(msg, cls=""){ statusEl.textContent=msg; statusEl.className=`status ${cls}`; }
+  /* ======== Dibujo ======== */
+  function drawFace(points,size=1.6){
+    ctx.fillStyle="#4ea1ff";
+    for(const p of points){ ctx.beginPath(); ctx.arc(p.x*canvas.width,p.y*canvas.height,size,0,Math.PI*2); ctx.fill(); }
+  }
+  function drawHand(points){
+    ctx.fillStyle="#2ecc71";
+    for(const p of points){ ctx.beginPath(); ctx.arc(p.x*canvas.width,p.y*canvas.height,3,0,Math.PI*2); ctx.fill(); }
+  }
+  const POSE_CONNECTIONS=[[11,12],[11,23],[12,24],[23,24],[11,13],[13,15],[12,14],[14,16],[23,25],[25,27],[27,29],[29,31],[24,26],[26,28],[28,30],[30,32]];
+  function drawPoseSkeleton(landmarks){
+    ctx.lineWidth=3; ctx.strokeStyle="#9ad1ff"; ctx.beginPath();
+    for(const [a,b] of POSE_CONNECTIONS){ const p=landmarks[a], q=landmarks[b]; if(!p||!q) continue; ctx.moveTo(p.x*canvas.width,p.y*canvas.height); ctx.lineTo(q.x*canvas.width,q.y*canvas.height); }
+    ctx.stroke();
+  }
 
-    /* ======== Estado y librerías ======== */
-    let running=false, frameCount=0, lastTime=performance.now(), fps=0;
-    let FilesetResolver=null, FaceLandmarker=null, HandLandmarker=null, PoseLandmarker=null;
-    let faceLandmarker=null, handLandmarker=null, poseLandmarker=null;
+  /* ======== Emociones (EMA + histeresis) ======== */
+  const EMA=new Map(), ALPHA=0.35; let lastEmotion="😐 Neutro", lastEmotionFrames=0;
+  function bs(blend,name){
+    if(!blend||!blend.categories) return 0;
+    const cat=blend.categories.find(c=>c.categoryName===name);
+    const raw=cat?cat.score:0, prev=EMA.has(name)?EMA.get(name):raw;
+    const sm=ALPHA*raw+(1-ALPHA)*prev; EMA.set(name,sm); return sm;
+  }
+  function estimateExpression(blend){
+    if(!blend) return "–";
+    const smile=(bs(blend,"mouthSmileLeft")+bs(blend,"mouthSmileRight"))/2;
+    const jawOpen=bs(blend,"jawOpen"), browUp=bs(blend,"browInnerUp");
+    const browDown=(bs(blend,"browDownLeft")+bs(blend,"browDownRight"))/2;
+    const mouthFrown=(bs(blend,"mouthFrownLeft")+bs(blend,"mouthFrownRight"))/2;
+    const mouthPress=(bs(blend,"mouthPressLeft")+bs(blend,"mouthPressRight"))/2;
+    const lipDep=(bs(blend,"mouthCornerPullDownLeft")+bs(blend,"mouthCornerPullDownRight"))/2 || (bs(blend,"mouthLowerDownLeft")+bs(blend,"mouthLowerDownRight"))/2;
+    const eyeSquint=(bs(blend,"eyeSquintLeft")+bs(blend,"eyeSquintRight"))/2;
+    const noseSneer=(bs(blend,"noseSneerLeft")+bs(blend,"noseSneerRight"))/2;
 
-    function updateFps(){
-      frameCount++; const now=performance.now();
-      if(now-lastTime>=1000){ fps=frameCount; frameCount=0; lastTime=now; mFps.textContent=String(fps); }
-    }
-    function clamp(x){ return Math.max(0,Math.min(1,x)); }
+    const scoreHappy=clamp(.9*smile-.3*mouthFrown-.2*mouthPress-.2*browDown+.1*browUp);
+    const scoreSurprised=clamp(.7*jawOpen+.3*browUp-.2*mouthPress);
+    const scoreSad=clamp(.7*lipDep+.6*mouthFrown+.3*browUp-.1*jawOpen);
+    const scoreAngry=clamp(.7*browDown+.5*mouthPress+.4*noseSneer+.3*eyeSquint-.1*jawOpen);
+    const scoreNeutral=.2;
 
-    async function importTasksVision(){
-      setStatus("Importando @mediapipe/tasks-vision…","warn");
-      const v="0.10.7";
-      const urls=[`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${v}`,`https://unpkg.com/@mediapipe/tasks-vision@${v}`];
-      let mod=null,lastErr=null;
-      for(const u of urls){ try{ mod=await import(u); setStatus(`Importado desde ${new URL(u).host}.`,"ok"); break; }catch(e){ lastErr=e; } }
-      if(!mod){ setStatus("No se pudo importar tasks-vision.","err"); throw lastErr||new Error("ImportFailed"); }
-      ({FilesetResolver,FaceLandmarker,HandLandmarker,PoseLandmarker}=mod);
-    }
+    const scores=[["😃 Feliz",scoreHappy],["😮 Sorprendido",scoreSurprised],["😢 Triste",scoreSad],["😠 Enojado",scoreAngry],["😐 Neutro",scoreNeutral]].sort((a,b)=>b[1]-a[1]);
+    const [cand,s]=scores[0]; const top2=scores[1][1];
+    const TH=.35, DH=.10;
+    let label=(s>=TH)?cand:"😐 Neutro";
+    if(label!==lastEmotion && (s-top2)<DH && lastEmotionFrames<8){ label=lastEmotion; lastEmotionFrames++; }
+    else { if(label===lastEmotion) lastEmotionFrames=Math.min(30,lastEmotionFrames+1); }
+    return label;
+  }
 
-    async function startCamera(){
-      setStatus("Solicitando cámara…","warn");
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video:{width:{ideal:1280},height:{ideal:720},facingMode:{ideal:"user"}}, audio:false
-      });
-      video.srcObject=stream;
-      await video.play();
-      resizeCanvas(); setStatus("Cámara iniciada.","ok");
-    }
+  /* ======== Dedos ======== */
+  function countFingersForHand(landmarks,handed="Unknown"){
+    if(!landmarks||landmarks.length!==21) return 0;
+    const TIP={thumb:4,index:8,middle:12,ring:16,pinky:20};
+    const PIP={index:6,middle:10,ring:14,pinky:18};
+    const MCP={thumb:2,index:5,middle:9,ring:13,pinky:17};
+    let count=0;
+    for(const f of ['index','middle','ring','pinky']){ const tip=landmarks[TIP[f]], pip=landmarks[PIP[f]], mcp=landmarks[MCP[f]]; if(tip.y<pip.y && tip.y<mcp.y) count++; }
+    const tt=landmarks[TIP.thumb], tip=landmarks[3], mp=landmarks[MCP.thumb];
+    if(handed==="Right"){ if(tt.x>tip.x && tt.x>mp.x) count++; }
+    else if(handed==="Left"){ if(tt.x<tip.x && tt.x<mp.x) count++; }
+    else { if(Math.abs(tt.x-tip.x)>0.05) count++; }
+    return count;
+  }
 
-    function resizeCanvas(){
-      const rect = canvas.getBoundingClientRect();
-      canvas.width = Math.max(640, Math.round(rect.width));
-      canvas.height= Math.max(360, Math.round(rect.height));
-    }
-    new ResizeObserver(resizeCanvas).observe(document.querySelector(".camera-stage"));
+  /* ======== Actualización de estadísticas ======== */
+  function updateStats(){
+    // Emociones
+    const emotionCounts=emotionTypes.map(t=>emotionHistory.filter(e=>e===t).length);
+    emotionChart.data.datasets[0].data=emotionCounts; emotionChart.update('none');
 
-    async function initModels(){
-      setStatus("Cargando modelos y WASM…","warn");
-      const v="0.10.7";
-      const vision=await FilesetResolver.forVisionTasks(`https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${v}/wasm`);
-      faceLandmarker = await FaceLandmarker.createFromOptions(vision,{
-        baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",delegate:"GPU"},
-        runningMode:"VIDEO",outputFaceBlendshapes:true,numFaces:1,minFaceDetectionConfidence:.5,minFacePresenceConfidence:.5,minTrackingConfidence:.5
-      });
-      handLandmarker = await HandLandmarker.createFromOptions(vision,{
-        baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"},
-        runningMode:"VIDEO",numHands:2,minHandDetectionConfidence:.5,minHandPresenceConfidence:.5,minTrackingConfidence:.5
-      });
-      poseLandmarker = await PoseLandmarker.createFromOptions(vision,{
-        baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",delegate:"GPU"},
-        runningMode:"VIDEO",numPoses:1,minPoseDetectionConfidence:.5,minPosePresenceConfidence:.5,minTrackingConfidence:.5
-      });
-      setStatus("Modelos listos.","ok");
-    }
+    // Dedos
+    const fingerCounts=[0,0,0,0,0,0,0];
+    fingerHistory.forEach(c=>{ if(c<=5) fingerCounts[c]++; else fingerCounts[6]++; });
+    fingerChart.data.datasets[0].data=fingerCounts; fingerChart.update('none');
 
-    /* ======== Dibujo ======== */
-    function drawFace(points,size=1.6){
-      ctx.fillStyle="#4ea1ff";
-      for(const p of points){ ctx.beginPath(); ctx.arc(p.x*canvas.width,p.y*canvas.height,size,0,Math.PI*2); ctx.fill(); }
-    }
-    function drawHand(points){
-      ctx.fillStyle="#2ecc71";
-      for(const p of points){ ctx.beginPath(); ctx.arc(p.x*canvas.width,p.y*canvas.height,3,0,Math.PI*2); ctx.fill(); }
-    }
-    const POSE_CONNECTIONS=[[11,12],[11,23],[12,24],[23,24],[11,13],[13,15],[12,14],[14,16],[23,25],[25,27],[27,29],[29,31],[24,26],[26,28],[28,30],[30,32]];
-    function drawPoseSkeleton(landmarks){
-      ctx.lineWidth=3; ctx.strokeStyle="#9ad1ff"; ctx.beginPath();
-      for(const [a,b] of POSE_CONNECTIONS){ const p=landmarks[a], q=landmarks[b]; if(!p||!q) continue; ctx.moveTo(p.x*canvas.width,p.y*canvas.height); ctx.lineTo(q.x*canvas.width,q.y*canvas.height); }
-      ctx.stroke();
-    }
+    // Frecuencias y duración
+    const freq={}; emotionTypes.forEach(t=>freq[t]=0); emotionHistory.forEach(e=>freq[e]++);
+    const sorted=Object.entries(freq).sort((a,b)=>b[1]-a[1]);
+    mostFrequent.textContent=sorted[0]?.[0]||'-';
+    leastFrequent.textContent=sorted[sorted.length-1]?.[0]||'-';
 
-    /* ======== Emociones (EMA + histeresis) ======== */
-    const EMA=new Map(), ALPHA=0.35; let lastEmotion="😐 Neutro", lastEmotionFrames=0;
-    function bs(blend,name){
-      if(!blend||!blend.categories) return 0;
-      const cat=blend.categories.find(c=>c.categoryName===name);
-      const raw=cat?cat.score:0, prev=EMA.has(name)?EMA.get(name):raw;
-      const sm=ALPHA*raw+(1-ALPHA)*prev; EMA.set(name,sm); return sm;
-    }
-    function estimateExpression(blend){
-      if(!blend) return "–";
-      const smile=(bs(blend,"mouthSmileLeft")+bs(blend,"mouthSmileRight"))/2;
-      const jawOpen=bs(blend,"jawOpen"), browUp=bs(blend,"browInnerUp");
-      const browDown=(bs(blend,"browDownLeft")+bs(blend,"browDownRight"))/2;
-      const mouthFrown=(bs(blend,"mouthFrownLeft")+bs(blend,"mouthFrownRight"))/2;
-      const mouthPress=(bs(blend,"mouthPressLeft")+bs(blend,"mouthPressRight"))/2;
-      const lipDep=(bs(blend,"mouthCornerPullDownLeft")+bs(blend,"mouthCornerPullDownRight"))/2 || (bs(blend,"mouthLowerDownLeft")+bs(blend,"mouthLowerDownRight"))/2;
-      const eyeSquint=(bs(blend,"eyeSquintLeft")+bs(blend,"eyeSquintRight"))/2;
-      const noseSneer=(bs(blend,"noseSneerLeft")+bs(blend,"noseSneerRight"))/2;
+    const durations=Object.values(emotionDuration).filter(v=>v>0);
+    const avg = durations.length? (durations.reduce((a,b)=>a+b,0)/durations.length)/1000 : 0;
+    avgDuration.textContent = durations.length? `${avg.toFixed(1)}s` : '-';
 
-      const scoreHappy=clamp(.9*smile-.3*mouthFrown-.2*mouthPress-.2*browDown+.1*browUp);
-      const scoreSurprised=clamp(.7*jawOpen+.3*browUp-.2*mouthPress);
-      const scoreSad=clamp(.7*lipDep+.6*mouthFrown+.3*browUp-.1*jawOpen);
-      const scoreAngry=clamp(.7*browDown+.5*mouthPress+.4*noseSneer+.3*eyeSquint-.1*jawOpen);
-      const scoreNeutral=.2;
+    if(lastEmotionChange){ const sAgo=Math.floor((Date.now()-lastEmotionChange)/1000); lastChange.textContent=`${sAgo}s atrás`; }
+    else lastChange.textContent='-';
 
-      const scores=[["😃 Feliz",scoreHappy],["😮 Sorprendido",scoreSurprised],["😢 Triste",scoreSad],["😠 Enojado",scoreAngry],["😐 Neutro",scoreNeutral]].sort((a,b)=>b[1]-a[1]);
-      const [cand,s]=scores[0]; const top2=scores[1][1];
-      const TH=.35, DH=.10;
-      let label=(s>=TH)?cand:"😐 Neutro";
-      if(label!==lastEmotion && (s-top2)<DH && lastEmotionFrames<8){ label=lastEmotion; lastEmotionFrames++; }
-      else { if(label===lastEmotion) lastEmotionFrames=Math.min(30,lastEmotionFrames+1); }
-      return label;
-    }
+    if(fingerHistory.length){
+      const sum=fingerHistory.reduce((a,b)=>a+b,0), max=Math.max(...fingerHistory), min=Math.min(...fingerHistory);
+      fingerAvg.textContent=(sum/fingerHistory.length).toFixed(1); fingerMax.textContent=max; fingerMin.textContent=min; fingerTotal.textContent=sum;
+    }else{ fingerAvg.textContent=fingerMax.textContent=fingerMin.textContent=fingerTotal.textContent='-'; }
+  }
 
-    /* ======== Dedos ======== */
-    function countFingersForHand(landmarks,handed="Unknown"){
-      if(!landmarks||landmarks.length!==21) return 0;
-      const TIP={thumb:4,index:8,middle:12,ring:16,pinky:20};
-      const PIP={index:6,middle:10,ring:14,pinky:18};
-      const MCP={thumb:2,index:5,middle:9,ring:13,pinky:17};
-      let count=0;
-      for(const f of ['index','middle','ring','pinky']){ const tip=landmarks[TIP[f]], pip=landmarks[PIP[f]], mcp=landmarks[MCP[f]]; if(tip.y<pip.y && tip.y<mcp.y) count++; }
-      const tt=landmarks[TIP.thumb], tip=landmarks[3], mp=landmarks[MCP.thumb];
-      if(handed==="Right"){ if(tt.x>tip.x && tt.x>mp.x) count++; }
-      else if(handed==="Left"){ if(tt.x<tip.x && tt.x<mp.x) count++; }
-      else { if(Math.abs(tt.x-tip.x)>0.05) count++; }
-      return count;
-    }
+  /* ======== Bucle principal ======== */
+  let lastEmotionLabel=lastEmotion;
+  async function loop(){
+    if(!running) return;
+    updateFps(); ctx.clearRect(0,0,canvas.width,canvas.height);
 
-    /* ======== Actualización de estadísticas ======== */
-    function updateStats(){
-      // Emociones (histograma)
-      const emotionCounts=emotionTypes.map(t=>emotionHistory.filter(e=>e===t).length);
-      emotionChart.data.datasets[0].data=emotionCounts; emotionChart.update('none');
+    let faces=0, hands=0, fingers=0, expr="–";
 
-      // Dedos
-      const fingerCounts=[0,0,0,0,0,0,0];
-      fingerHistory.forEach(c=>{ if(c<=5) fingerCounts[c]++; else fingerCounts[6]++; });
-      fingerChart.data.datasets[0].data=fingerCounts; fingerChart.update('none');
-
-      // Frecuencias y duración
-      const freq={}; emotionTypes.forEach(t=>freq[t]=0); emotionHistory.forEach(e=>freq[e]++);
-      const sorted=Object.entries(freq).sort((a,b)=>b[1]-a[1]);
-      mostFrequent.textContent=sorted[0]?.[0]||'-';
-      leastFrequent.textContent=sorted[sorted.length-1]?.[0]||'-';
-
-      const durations=Object.values(emotionDuration).filter(v=>v>0);
-      const avg = durations.length? (durations.reduce((a,b)=>a+b,0)/durations.length)/1000 : 0;
-      avgDuration.textContent = durations.length? `${avg.toFixed(1)}s` : '-';
-
-      if(lastEmotionChange){ const sAgo=Math.floor((Date.now()-lastEmotionChange)/1000); lastChange.textContent=`${sAgo}s atrás`; }
-      else lastChange.textContent='-';
-
-      if(fingerHistory.length){
-        const sum=fingerHistory.reduce((a,b)=>a+b,0), max=Math.max(...fingerHistory), min=Math.min(...fingerHistory);
-        fingerAvg.textContent=(sum/fingerHistory.length).toFixed(1); fingerMax.textContent=max; fingerMin.textContent=min; fingerTotal.textContent=sum;
-      }else{ fingerAvg.textContent=fingerMax.textContent=fingerMin.textContent=fingerTotal.textContent='-'; }
-    }
-
-    /* ======== Bucle principal ======== */
-    let lastEmotionLabel=lastEmotion;
-    async function loop(){
-      if(!running) return;
-      updateFps(); ctx.clearRect(0,0,canvas.width,canvas.height);
-
-      let faces=0, hands=0, fingers=0, expr="–";
-
-      if(faceLandmarker){
-        try{
-          const rf=faceLandmarker.detectForVideo(video,performance.now());
-          if(rf?.faceLandmarks?.length){
-            faces=rf.faceLandmarks.length; drawFace(rf.faceLandmarks[0],1.6);
-            if(rf.faceBlendshapes?.length){ expr=estimateExpression(rf.faceBlendshapes[0]); }
-          }
-        }catch(_){}
-      }
-      if(handLandmarker){
-        try{
-          const rh=handLandmarker.detectForVideo(video,performance.now());
-          if(rh){
-            const L=rh.landmarks||rh.handLandmarks||[], H=rh.handedness||rh.handednesses||[];
-            hands=L.length;
-            for(let i=0;i<L.length;i++){ drawHand(L[i]); const label=(H[i]&&H[i][0]&&H[i][0].categoryName)?H[i][0].categoryName:"Unknown"; fingers+=countFingersForHand(L[i],label); }
-          }
-        }catch(_){}
-      }
-      if(poseLandmarker){
-        try{
-          const rp=poseLandmarker.detectForVideo(video,performance.now());
-          if(rp?.landmarks?.length){ drawPoseSkeleton(rp.landmarks[0]); }
-        }catch(_){}
-      }
-
-      mFaces.textContent=String(faces); mHands.textContent=String(hands); mFingers.textContent=String(fingers); mExpr.textContent=expr;
-
-      // Historial y duración (sin doble conteo)
-      const now=Date.now();
-      if(expr!=="–"){
-        if(expr!==lastEmotionLabel){
-          emotionDuration[lastEmotionLabel]+= now - currentEmotionStart;
-          currentEmotionStart=now; lastEmotionChange=now; lastEmotionLabel=expr;
+    if(faceLandmarker){
+      try{
+        const rf=faceLandmarker.detectForVideo(video,performance.now());
+        if(rf?.faceLandmarks?.length){
+          faces=rf.faceLandmarks.length; drawFace(rf.faceLandmarks[0],1.6);
+          if(rf.faceBlendshapes?.length){ expr=estimateExpression(rf.faceBlendshapes[0]); }
         }
-        if(emotionHistory.length>100) emotionHistory.shift();
-        emotionHistory.push(expr);
-      }
-      if(fingerHistory.length>100) fingerHistory.shift();
+      }catch(_){}
+    }
+    if(handLandmarker){
+      try{
+        const rh=handLandmarker.detectForVideo(video,performance.now());
+        if(rh){
+          const L=rh.landmarks||rh.handLandmarks||[], H=rh.handedness||rh.handednesses||[];
+          hands=L.length;
+          for(let i=0;i<L.length;i++){ drawHand(L[i]); const label=(H[i]&&H[i][0]&&H[i][0].categoryName)?H[i][0].categoryName:"Unknown"; fingers+=countFingersForHand(L[i],label); }
+        }
+      }catch(_){}
+    }
+    if(poseLandmarker){
+      try{
+        const rp=poseLandmarker.detectForVideo(video,performance.now());
+        if(rp?.landmarks?.length){ drawPoseSkeleton(rp.landmarks[0]); }
+      }catch(_){}
+    }
+
+    mFaces.textContent=String(faces); mHands.textContent=String(hands); mFingers.textContent=String(fingers); mExpr.textContent=expr;
+
+    // Duración de emoción (evitar doble conteo)
+    const now=Date.now();
+    if(expr!=="–" && expr!==lastEmotionLabel){
+      emotionDuration[lastEmotionLabel]+= now - currentEmotionStart;
+      currentEmotionStart=now; lastEmotionChange=now; lastEmotionLabel=expr;
+    }
+
+    // --- Muestreo temporizado cada 1.5 s y retención de 1000 ---
+    const t = performance.now();
+    if (t >= nextSampleAt) {
+      if (expr !== "–") emotionHistory.push(expr);
       fingerHistory.push(fingers);
 
-      if(frameCount%12===0) updateStats();
-      requestAnimationFrame(loop);
+      // Mantener último millar de observaciones
+      if (emotionHistory.length > MAX_HISTORY)
+        emotionHistory.splice(0, emotionHistory.length - MAX_HISTORY);
+      if (fingerHistory.length > MAX_HISTORY)
+        fingerHistory.splice(0, fingerHistory.length - MAX_HISTORY);
+
+      updateStats();
+      nextSampleAt += SAMPLE_INTERVAL_MS;
     }
 
-    /* ======== Arranque ======== */
-    btn.addEventListener("click", async ()=>{
-      btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Iniciando…';
-      try{
-        await startCamera(); await importTasksVision(); await initModels();
-        running=true; loop(); btn.innerHTML='<i class="fas fa-play"></i> Laboratorio Activo';
-      }catch(e){
-        setStatus(`Error: ${e?.message||e}`,"err");
-        btn.disabled=false; btn.innerHTML='<i class="fas fa-camera"></i> Iniciar Laboratorio';
-      }
-    });
-  </script>
+    requestAnimationFrame(loop);
+  }
+
+  /* ======== Arranque ======== */
+  btn.addEventListener("click", async ()=>{
+    btn.disabled=true; btn.innerHTML='<i class="fas fa-spinner fa-spin"></i> Iniciando…';
+    try{
+      await startCamera(); await importTasksVision(); await initModels();
+      running=true; loop(); btn.innerHTML='<i class="fas fa-play"></i> Laboratorio Activo';
+    }catch(e){
+      setStatus(`Error: ${e?.message||e}`,"err");
+      btn.disabled=false; btn.innerHTML='<i class="fas fa-camera"></i> Iniciar Laboratorio';
+    }
+  });
+</script>
+
 </body>
 </html>
