@@ -182,7 +182,7 @@
   const mFps=$("fps"), mFaces=$("nfaces"), mHands=$("nhands"), mFingers=$("fingers"), mExpr=$("expr");
   const statusEl=document.querySelector(".camera-header .status");
 
-  /* ======== Estadísticas y gráficos ======== */
+  /* ======== Estadísticas y gráficos (actividad original) ======== */
   const mostFrequent=$("mostFrequent"), leastFrequent=$("leastFrequent"),
         avgDuration=$("avgDuration"), lastChange=$("lastChange"),
         fingerAvg=$("fingerAvg"), fingerMax=$("fingerMax"),
@@ -190,43 +190,27 @@
 
   const emotionHistory=[], fingerHistory=[], emotionDuration={};
   let lastEmotionChange=0, currentEmotionStart=Date.now();
-
   const emotionTypes=['😃 Feliz','😮 Sorprendido','😢 Triste','😠 Enojado','😐 Neutro'];
   emotionTypes.forEach(t=>emotionDuration[t]=0);
 
-  
+  // === Gráfico de emociones sin "Neutro" ===
+  const EMO_LABELS_PLOT = ['Feliz','Sorprendido','Triste','Enojado'];
+  const emotionChart=new Chart($("emotionChart"),{
+    type:'pie',
+    data:{labels:EMO_LABELS_PLOT,
+      datasets:[{data:[0,0,0,0],backgroundColor:['#4ea1ff','#f9a826','#2ecc71','#ff6b6b'],borderWidth:0}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:'#f8fafc',font:{size:12}}}}}
+  });
 
-
-  // SIN "Neutro" en etiquetas ni datos (4 categorías)
-const EMO_LABELS_PLOT = ['Feliz','Sorprendido','Triste','Enojado'];
-
-const emotionChart = new Chart($('emotionChart'), {
-  type: 'pie',
-  data: {
-    labels: EMO_LABELS_PLOT,
-    datasets: [{
-      data: [0, 0, 0, 0],
-      backgroundColor: ['#4ea1ff','#f9a826','#2ecc71','#ff6b6b'],
-      borderWidth: 0
-    }]
-  },
-  options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: { legend: { position: 'bottom', labels: { color: '#f8fafc', font: { size: 12 } } } }
-  }
-});
-
-  
+  // === Gráfico de dedos sin la barra de "0" ===
+  const FINGER_LABELS_PLOT = ['1','2','3','4','5','6+'];
   const fingerChart=new Chart($("fingerChart"),{
     type:'bar',
-    data:{labels:['0','1','2','3','4','5','6+'],datasets:[{label:'Conteo',data:[0,0,0,0,0,0,0],backgroundColor:'#4ea1ff',borderWidth:0}]},
+    data:{labels:FINGER_LABELS_PLOT,datasets:[{label:'Conteo',data:[0,0,0,0,0,0],backgroundColor:'#4ea1ff',borderWidth:0}]},
     options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true,ticks:{color:'#f8fafc'},grid:{color:'rgba(255,255,255,.1)'}},x:{ticks:{color:'#f8fafc'},grid:{display:false}}},plugins:{legend:{display:false}}}
   });
 
   function setStatus(msg, cls=""){ statusEl.textContent=msg; statusEl.className=`status ${cls}`; }
-
-  
 
   /* ======== Estado y librerías ======== */
   let running=false, frameCount=0, lastTime=performance.now(), fps=0;
@@ -235,7 +219,7 @@ const emotionChart = new Chart($('emotionChart'), {
 
   // --- Parámetros de muestreo/retención ---
   const SAMPLE_INTERVAL_MS = 1500; // 1.5 s entre muestras
-  const MAX_HISTORY = 1000;        // conservar último millar de observaciones
+  const MAX_HISTORY = 1000;        // conservar último millar
   let nextSampleAt = performance.now() + SAMPLE_INTERVAL_MS;
 
   function updateFps(){
@@ -306,7 +290,7 @@ const emotionChart = new Chart($('emotionChart'), {
     ctx.stroke();
   }
 
-  /* ======== Emociones (EMA + histeresis) ======== */
+  /* ======== Emociones (EMA + histeresis) — ajustada para Tristeza/Furia ======== */
   const EMA=new Map(), ALPHA=0.35; let lastEmotion="😐 Neutro", lastEmotionFrames=0;
   function bs(blend,name){
     if(!blend||!blend.categories) return 0;
@@ -316,27 +300,56 @@ const emotionChart = new Chart($('emotionChart'), {
   }
   function estimateExpression(blend){
     if(!blend) return "–";
-    const smile=(bs(blend,"mouthSmileLeft")+bs(blend,"mouthSmileRight"))/2;
-    const jawOpen=bs(blend,"jawOpen"), browUp=bs(blend,"browInnerUp");
-    const browDown=(bs(blend,"browDownLeft")+bs(blend,"browDownRight"))/2;
-    const mouthFrown=(bs(blend,"mouthFrownLeft")+bs(blend,"mouthFrownRight"))/2;
-    const mouthPress=(bs(blend,"mouthPressLeft")+bs(blend,"mouthPressRight"))/2;
-    const lipDep=(bs(blend,"mouthCornerPullDownLeft")+bs(blend,"mouthCornerPullDownRight"))/2 || (bs(blend,"mouthLowerDownLeft")+bs(blend,"mouthLowerDownRight"))/2;
-    const eyeSquint=(bs(blend,"eyeSquintLeft")+bs(blend,"eyeSquintRight"))/2;
-    const noseSneer=(bs(blend,"noseSneerLeft")+bs(blend,"noseSneerRight"))/2;
+    // Rasgos (labios/cejas + soporte)
+    const smile   = (bs(blend,"mouthSmileLeft")+bs(blend,"mouthSmileRight"))/2;
+    const jawOpen = bs(blend,"jawOpen");
+    const browInUp   = bs(blend,"browInnerUp");
+    const browDown   = (bs(blend,"browDownLeft")+bs(blend,"browDownRight"))/2;
+    const browOutUp  = (bs(blend,"browOuterUpLeft")+bs(blend,"browOuterUpRight"))/2;
+    const mouthFrown = (bs(blend,"mouthFrownLeft")+bs(blend,"mouthFrownRight"))/2;
+    const mouthPress = (bs(blend,"mouthPressLeft")+bs(blend,"mouthPressRight"))/2;
+    const cornerDown = (bs(blend,"mouthCornerPullDownLeft")+bs(blend,"mouthCornerPullDownRight"))/2;
+    const lowerDown  = (bs(blend,"mouthLowerDownLeft")+bs(blend,"mouthLowerDownRight"))/2;
+    const eyeSquint = (bs(blend,"eyeSquintLeft")+bs(blend,"eyeSquintRight"))/2;
+    const noseSneer = (bs(blend,"noseSneerLeft")+bs(blend,"noseSneerRight"))/2;
 
-    const scoreHappy=clamp(.9*smile-.3*mouthFrown-.2*mouthPress-.2*browDown+.1*browUp);
-    const scoreSurprised=clamp(.7*jawOpen+.3*browUp-.2*mouthPress);
-    const scoreSad=clamp(.7*lipDep+.6*mouthFrown+.3*browUp-.1*jawOpen);
-    const scoreAngry=clamp(.7*browDown+.5*mouthPress+.4*noseSneer+.3*eyeSquint-.1*jawOpen);
-    const scoreNeutral=.2;
+    // Tristeza (labios hacia abajo + ceja interna elevada)
+    let scoreSad = 0.9*cornerDown + 0.6*mouthFrown + 0.5*browInUp + 0.2*browOutUp
+                   - 0.20*smile - 0.10*jawOpen;
+    if (cornerDown>0.5 && browInUp>0.4) scoreSad += 0.08;
 
-    const scores=[["😃 Feliz",scoreHappy],["😮 Sorprendido",scoreSurprised],["😢 Triste",scoreSad],["😠 Enojado",scoreAngry],["😐 Neutro",scoreNeutral]].sort((a,b)=>b[1]-a[1]);
-    const [cand,s]=scores[0]; const top2=scores[1][1];
-    const TH=.35, DH=.10;
-    let label=(s>=TH)?cand:"😐 Neutro";
-    if(label!==lastEmotion && (s-top2)<DH && lastEmotionFrames<8){ label=lastEmotion; lastEmotionFrames++; }
-    else { if(label===lastEmotion) lastEmotionFrames=Math.min(30,lastEmotionFrames+1); }
+    // Furia (cejas bajas + labios presionados + aletas nasales + ojos entrecerrados)
+    let scoreAng = 0.9*browDown + 0.6*mouthPress + 0.5*noseSneer + 0.3*eyeSquint
+                   - 0.20*smile - 0.15*jawOpen;
+    if (browDown>0.5 && mouthPress>0.4) scoreAng += 0.08;
+
+    // Alegría y sorpresa
+    const scoreHap = clamp( 0.9*smile - 0.3*mouthFrown - 0.2*mouthPress - 0.2*browDown + 0.1*browInUp );
+    const scoreSur = clamp( 0.7*jawOpen + 0.3*browInUp - 0.2*mouthPress );
+
+    // Neutro bajo para evitar dominancia
+    let scoreNeu = 0.05;
+
+    scoreSad = clamp(scoreSad); scoreAng = clamp(scoreAng);
+
+    const scores = [
+      ["😃 Feliz",       scoreHap],
+      ["😮 Sorprendido", scoreSur],
+      ["😢 Triste",      scoreSad],
+      ["😠 Enojado",     scoreAng],
+      ["😐 Neutro",      scoreNeu],
+    ].sort((a,b)=>b[1]-a[1]);
+
+    const [cand, s] = scores[0]; const top2 = scores[1][1];
+    const TH = 0.33, DH = 0.10;
+    let label = (s >= TH) ? cand : "😐 Neutro";
+
+    if (label !== lastEmotion && (s - top2) < DH && lastEmotionFrames < 8){
+      label = lastEmotion; lastEmotionFrames++;
+    } else {
+      if (label === lastEmotion) lastEmotionFrames = Math.min(30, lastEmotionFrames+1);
+      else { lastEmotionFrames = 0; lastEmotion = label; currentEmotionStart = Date.now(); lastEmotionChange = currentEmotionStart; }
+    }
     return label;
   }
 
@@ -347,7 +360,10 @@ const emotionChart = new Chart($('emotionChart'), {
     const PIP={index:6,middle:10,ring:14,pinky:18};
     const MCP={thumb:2,index:5,middle:9,ring:13,pinky:17};
     let count=0;
-    for(const f of ['index','middle','ring','pinky']){ const tip=landmarks[TIP[f]], pip=landmarks[PIP[f]], mcp=landmarks[MCP[f]]; if(tip.y<pip.y && tip.y<mcp.y) count++; }
+    for(const f of ['index','middle','ring','pinky']){
+      const tip=landmarks[TIP[f]], pip=landmarks[PIP[f]], mcp=landmarks[MCP[f]];
+      if(tip.y<pip.y && tip.y<mcp.y) count++;
+    }
     const tt=landmarks[TIP.thumb], tip=landmarks[3], mp=landmarks[MCP.thumb];
     if(handed==="Right"){ if(tt.x>tip.x && tt.x>mp.x) count++; }
     else if(handed==="Left"){ if(tt.x<tip.x && tt.x<mp.x) count++; }
@@ -355,27 +371,124 @@ const emotionChart = new Chart($('emotionChart'), {
     return count;
   }
 
-  /* ======== Actualización de estadísticas ======== */
+  /* ======== NUEVA ACTIVIDAD: Estatura & Peso ======== */
+  let scalePxPerCm = null;         // pixeles por cm (de la mano)
+  let lastCalibTime = 0;
+  const CAL_HAND_CM = 15.0;        // índice–meñique
+  const CAL_SPAN_MIN_PX = 30;      // para evitar ruido
+  const HEIGHT_RANGE = [120, 200]; // cm plausibles
+  const WEIGHT_RANGE = [25, 150];  // kg plausibles
+
+  let heightCalib = 1.0;  // multiplicador fino de estatura
+  let weightCalib = 1.0;  // multiplicador fino de peso
+
+  const hwSamples = []; // {h,w,bmi}
+  (function injectHWChart(){
+    const host = document.querySelector('.charts-section');
+    const card = document.createElement('div');
+    card.className = 'chart-card';
+    card.innerHTML = `<div class="chart-title">Estatura vs Peso (R²=<span id="r2val">–</span>)</div>
+                      <div class="chart-wrap"><canvas id="hwChart"></canvas></div>`;
+    host.appendChild(card);
+  })();
+  const r2Span = document.getElementById('r2val');
+  const hwChart = new Chart($("#hwChart"), {
+    type: 'scatter',
+    data: {
+      datasets: [
+        {label:'Muestras', data: [], pointRadius:4, backgroundColor:'#f9a826'},
+        {label:'Regresión', data: [], type:'line', borderWidth:2, borderColor:'#ff6b6b', pointRadius:0, fill:false}
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      scales:{
+        x:{title:{display:true,text:'Estatura (cm)',color:'#f8fafc'}, ticks:{color:'#f8fafc'}, grid:{color:'rgba(255,255,255,.1)'}},
+        y:{title:{display:true,text:'Peso (kg)',color:'#f8fafc'}, ticks:{color:'#f8fafc'}, grid:{color:'rgba(255,255,255,.1)'}}
+      },
+      plugins:{legend:{labels:{color:'#f8fafc'}}}
+    }
+  });
+
+  function handSpanPx(lmk){
+    const i = lmk[8], p = lmk[20];
+    const dx = (i.x - p.x) * canvas.width;
+    const dy = (i.y - p.y) * canvas.height;
+    return Math.hypot(dx, dy);
+  }
+
+  function calcHeightCm(poseLmk){
+    const headIdx=[0,1,2,3,4,5,6,7,8], footIdx=[27,28,29,30,31,32];
+    const ysHead = headIdx.map(i => poseLmk[i]?.y).filter(v => v!==undefined);
+    const ysFoot = footIdx.map(i => poseLmk[i]?.y).filter(v => v!==undefined);
+    if(!ysHead.length || !ysFoot.length || !scalePxPerCm) return null;
+    const headY = Math.min(...ysHead), footY = Math.max(...ysFoot);
+    const px = (footY - headY) * canvas.height;
+    return (px / scalePxPerCm) * heightCalib;
+  }
+
+  function calcWidthCm(poseLmk){
+    const L11=poseLmk[11], R12=poseLmk[12], L23=poseLmk[23], R24=poseLmk[24];
+    if(!(L11&&R12&&L23&&R24) || !scalePxPerCm) return null;
+    const sh = Math.abs((L11.x - R12.x) * canvas.width);
+    const wa = Math.abs((L23.x - R24.x) * canvas.width);
+    return ((sh + wa) / 2) / scalePxPerCm;
+  }
+
+  function estimateWeightKg(heightCm, widthCm){
+    let w = (1.8 * widthCm + 0.25 * heightCm - 30) * weightCalib;
+    return w;
+  }
+  function clip(v,[a,b]){ return Math.max(a, Math.min(b, v)); }
+
+  function linearRegression(xs, ys){
+    const n = xs.length; if(n<2) return null;
+    const mean = arr => arr.reduce((s,v)=>s+v,0)/arr.length;
+    const mx = mean(xs), my = mean(ys);
+    let num=0, den=0, ssRes=0, ssTot=0;
+    for(let i=0;i<n;i++){ const dx=xs[i]-mx; num += dx*(ys[i]-my); den += dx*dx; }
+    const b1 = den===0 ? 0 : num/den;
+    const b0 = my - b1*mx;
+    for(let i=0;i<n;i++){ const yhat=b0+b1*xs[i]; ssRes += (ys[i]-yhat)**2; ssTot += (ys[i]-my)**2; }
+    const r2 = ssTot===0 ? 1 : 1 - ssRes/ssTot;
+    return {b0,b1,r2};
+  }
+
+  function updateHWChart(){
+    const pts = hwSamples.map(s => ({x:s.h, y:s.w}));
+    hwChart.data.datasets[0].data = pts;
+
+    const xs = hwSamples.map(s=>s.h), ys = hwSamples.map(s=>s.w);
+    const lr = linearRegression(xs, ys);
+    if(lr){
+      const xMin = Math.min(...xs), xMax = Math.max(...xs);
+      const y1 = lr.b0 + lr.b1 * xMin, y2 = lr.b0 + lr.b1 * xMax;
+      hwChart.data.datasets[1].data = [{x:xMin,y:y1},{x:xMax,y:y2}];
+      r2Span.textContent = lr.r2.toFixed(2);
+    }
+    hwChart.update('none');
+  }
+
+  /* ======== Actualización de estadísticas (actividad original) ======== */
   function updateStats(){
+    // Emociones: contar solo no-neutras para el gráfico
+    const mapPlot = {
+      '😃 Feliz':'Feliz', '😮 Sorprendido':'Sorprendido',
+      '😢 Triste':'Triste', '😠 Enojado':'Enojado'
+    };
+    const emotionCountsObj = {Feliz:0, Sorprendido:0, Triste:0, Enojado:0};
+    emotionHistory.forEach(e => { if (mapPlot[e]) emotionCountsObj[mapPlot[e]]++; });
+    emotionChart.data.datasets[0].data = EMO_LABELS_PLOT.map(k => emotionCountsObj[k]);
+    emotionChart.update('none');
 
-      // Contar solo emociones NO neutras (coinciden con los labels del gráfico)
-  const mapPlot = {
-    '😃 Feliz':'Feliz', '😮 Sorprendido':'Sorprendido',
-    '😢 Triste':'Triste', '😠 Enojado':'Enojado'
-  };
-  const emotionCountsObj = {Feliz:0, Sorprendido:0, Triste:0, Enojado:0};
-  emotionHistory.forEach(e => { if (mapPlot[e]) emotionCountsObj[mapPlot[e]]++; });
-  emotionChart.data.datasets[0].data = EMO_LABELS_PLOT.map(k => emotionCountsObj[k]);
-  emotionChart.update('none');
-
-    
-
-    // Dedos
+    // Dedos: excluir cero en el gráfico
     const fingerCounts=[0,0,0,0,0,0,0];
     fingerHistory.forEach(c=>{ if(c<=5) fingerCounts[c]++; else fingerCounts[6]++; });
-    fingerChart.data.datasets[0].data=fingerCounts; fingerChart.update('none');
+    const fingerCountsPlot = fingerCounts.slice(1); // [1..5, 6+]
+    fingerChart.data.datasets[0].data = fingerCountsPlot;
+    fingerChart.update('none');
 
-    // Frecuencias y duración
+    // Frecuencias y duración (se mantiene para todas, incl. neutro)
     const freq={}; emotionTypes.forEach(t=>freq[t]=0); emotionHistory.forEach(e=>freq[e]++);
     const sorted=Object.entries(freq).sort((a,b)=>b[1]-a[1]);
     mostFrequent.textContent=sorted[0]?.[0]||'-';
@@ -402,6 +515,7 @@ const emotionChart = new Chart($('emotionChart'), {
 
     let faces=0, hands=0, fingers=0, expr="–";
 
+    // Rostro
     if(faceLandmarker){
       try{
         const rf=faceLandmarker.detectForVideo(video,performance.now());
@@ -411,45 +525,80 @@ const emotionChart = new Chart($('emotionChart'), {
         }
       }catch(_){}
     }
+
+    // Manos (y calibración)
     if(handLandmarker){
       try{
         const rh=handLandmarker.detectForVideo(video,performance.now());
         if(rh){
           const L=rh.landmarks||rh.handLandmarks||[], H=rh.handedness||rh.handednesses||[];
           hands=L.length;
-          for(let i=0;i<L.length;i++){ drawHand(L[i]); const label=(H[i]&&H[i][0]&&H[i][0].categoryName)?H[i][0].categoryName:"Unknown"; fingers+=countFingersForHand(L[i],label); }
+          for(let i=0;i<L.length;i++){
+            drawHand(L[i]);
+            const label=(H[i]&&H[i][0]&&H[i][0].categoryName)?H[i][0].categoryName:"Unknown";
+            const f = countFingersForHand(L[i], label);
+            fingers += f;
+            if(f===5){
+              const span = handSpanPx(L[i]);
+              if(span>CAL_SPAN_MIN_PX){
+                scalePxPerCm = span / CAL_HAND_CM;
+                lastCalibTime = performance.now();
+                setStatus(`Calibrado: ${scalePxPerCm.toFixed(2)} px/cm`, "ok");
+              }
+            }
+          }
         }
       }catch(_){}
     }
+
+    // Pose (para altura/peso)
+    let heightCm=null, widthCm=null, weightKg=null, bmi=null;
     if(poseLandmarker){
       try{
         const rp=poseLandmarker.detectForVideo(video,performance.now());
-        if(rp?.landmarks?.length){ drawPoseSkeleton(rp.landmarks[0]); }
+        if(rp?.landmarks?.length){
+          const lmk = rp.landmarks[0];
+          drawPoseSkeleton(lmk);
+          if(scalePxPerCm){
+            heightCm = calcHeightCm(lmk);
+            widthCm  = calcWidthCm(lmk);
+            if(heightCm && widthCm){
+              heightCm = clip(heightCm, HEIGHT_RANGE);
+              weightKg = clip(estimateWeightKg(heightCm, widthCm), WEIGHT_RANGE);
+              bmi = weightKg / ((heightCm/100)**2);
+            }
+          }
+        }
       }catch(_){}
     }
 
-    mFaces.textContent=String(faces); mHands.textContent=String(hands); mFingers.textContent=String(fingers); mExpr.textContent=expr;
+    // KPIs originales
+    mFaces.textContent=String(faces);
+    mHands.textContent=String(hands);
+    mFingers.textContent=String(fingers);
+    mExpr.textContent=expr;
 
-    // Duración de emoción (evitar doble conteo)
-    const now=Date.now();
+    // Duración emoción (sin doble conteo)
+    const nowTS=Date.now();
     if(expr!=="–" && expr!==lastEmotionLabel){
-      emotionDuration[lastEmotionLabel]+= now - currentEmotionStart;
-      currentEmotionStart=now; lastEmotionChange=now; lastEmotionLabel=expr;
+      emotionDuration[lastEmotionLabel]+= nowTS - currentEmotionStart;
+      currentEmotionStart=nowTS; lastEmotionChange=nowTS; lastEmotionLabel=expr;
     }
 
-    // --- Muestreo temporizado cada 1.5 s y retención de 1000 ---
+    // --- Muestreo temporizado (1.5 s) para ambas actividades ---
     const t = performance.now();
     if (t >= nextSampleAt) {
       if (expr !== "–") emotionHistory.push(expr);
       fingerHistory.push(fingers);
-
-      // Mantener último millar de observaciones
-      if (emotionHistory.length > MAX_HISTORY)
-        emotionHistory.splice(0, emotionHistory.length - MAX_HISTORY);
-      if (fingerHistory.length > MAX_HISTORY)
-        fingerHistory.splice(0, fingerHistory.length - MAX_HISTORY);
-
+      if (emotionHistory.length > MAX_HISTORY) emotionHistory.splice(0, emotionHistory.length - MAX_HISTORY);
+      if (fingerHistory.length  > MAX_HISTORY) fingerHistory.splice(0,  fingerHistory.length  - MAX_HISTORY);
       updateStats();
+
+      if (heightCm && weightKg) {
+        hwSamples.push({h:heightCm, w:weightKg, bmi:bmi});
+        if (hwSamples.length > MAX_HISTORY) hwSamples.splice(0, hwSamples.length - MAX_HISTORY);
+        updateHWChart();
+      }
       nextSampleAt += SAMPLE_INTERVAL_MS;
     }
 
@@ -468,6 +617,7 @@ const emotionChart = new Chart($('emotionChart'), {
     }
   });
 </script>
+
 
 </body>
 </html>
