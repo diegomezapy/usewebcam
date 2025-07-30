@@ -194,12 +194,30 @@
   const emotionTypes=['😃 Feliz','😮 Sorprendido','😢 Triste','😠 Enojado','😐 Neutro'];
   emotionTypes.forEach(t=>emotionDuration[t]=0);
 
-  const emotionChart=new Chart($("emotionChart"),{
-    type:'pie',
-    data:{labels:['Feliz','Sorprendido','Triste','Enojado','Neutro'],
-      datasets:[{data:[0,0,0,0,0],backgroundColor:['#4ea1ff','#f9a826','#2ecc71','#ff6b6b','#cbd5e1'],borderWidth:0}]},
-    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:'#f8fafc',font:{size:12}}}}}
-  });
+  
+
+
+  // SIN "Neutro" en etiquetas ni datos (4 categorías)
+const EMO_LABELS_PLOT = ['Feliz','Sorprendido','Triste','Enojado'];
+
+const emotionChart = new Chart($('emotionChart'), {
+  type: 'pie',
+  data: {
+    labels: EMO_LABELS_PLOT,
+    datasets: [{
+      data: [0, 0, 0, 0],
+      backgroundColor: ['#4ea1ff','#f9a826','#2ecc71','#ff6b6b'],
+      borderWidth: 0
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { position: 'bottom', labels: { color: '#f8fafc', font: { size: 12 } } } }
+  }
+});
+
+  
   const fingerChart=new Chart($("fingerChart"),{
     type:'bar',
     data:{labels:['0','1','2','3','4','5','6+'],datasets:[{label:'Conteo',data:[0,0,0,0,0,0,0],backgroundColor:'#4ea1ff',borderWidth:0}]},
@@ -207,6 +225,8 @@
   });
 
   function setStatus(msg, cls=""){ statusEl.textContent=msg; statusEl.className=`status ${cls}`; }
+
+  
 
   /* ======== Estado y librerías ======== */
   let running=false, frameCount=0, lastTime=performance.now(), fps=0;
@@ -337,9 +357,18 @@
 
   /* ======== Actualización de estadísticas ======== */
   function updateStats(){
-    // Emociones
-    const emotionCounts=emotionTypes.map(t=>emotionHistory.filter(e=>e===t).length);
-    emotionChart.data.datasets[0].data=emotionCounts; emotionChart.update('none');
+
+      // Contar solo emociones NO neutras (coinciden con los labels del gráfico)
+  const mapPlot = {
+    '😃 Feliz':'Feliz', '😮 Sorprendido':'Sorprendido',
+    '😢 Triste':'Triste', '😠 Enojado':'Enojado'
+  };
+  const emotionCountsObj = {Feliz:0, Sorprendido:0, Triste:0, Enojado:0};
+  emotionHistory.forEach(e => { if (mapPlot[e]) emotionCountsObj[mapPlot[e]]++; });
+  emotionChart.data.datasets[0].data = EMO_LABELS_PLOT.map(k => emotionCountsObj[k]);
+  emotionChart.update('none');
+
+    
 
     // Dedos
     const fingerCounts=[0,0,0,0,0,0,0];
